@@ -8,23 +8,26 @@
 #ifndef DALLASONEWIRE_ROM_H_
 #define DALLASONEWIRE_ROM_H_
 
-// class ROM {
-// public:
-// 	ROM();
+#include <assert.h>
+#include <inttypes.h>
+#include <stdbool.h>
 
-// 	bool isMathFamily(unsigned char family) const;
-// 	unsigned char& operator [](int i);
-// 	const unsigned char& operator [](int i) const;
-// 	bool operator < (const ROM& cmp) const;
-// 	bool operator == (const ROM& cmp) const;
-// 	bool isNull() const;
-// 	const unsigned long long int& operator &() const;
-// 	const char* toString() const;
-// 	void zeroing();
-// 	bool operator = (const char * str);
-// private:
 struct rom_t {
-	unsigned char ROM_NO[8];
+    union {
+        unsigned char no[8];
+        uint64_t raw;
+    };
 };
+
+static_assert(sizeof(struct rom_t) == 8);
+
+bool rom_is_match_family(const struct rom_t *rom, unsigned char family);
+bool rom_less_then(const struct rom_t *rom, const struct rom_t *cmp);
+const char *rom_to_string(const struct rom_t *rom);
+bool rom_is_equal(const struct rom_t *rom, const struct rom_t *cmp);
+bool rom_is_null(const struct rom_t *rom);
+
+void rom_zeroing(struct rom_t *rom);
+bool rom_from_string(struct rom_t *rom, const char *str);
 
 #endif /* DALLASONEWIRE_ROM_H_ */

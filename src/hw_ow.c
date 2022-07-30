@@ -13,14 +13,21 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
+typedef int uart_num_t;
+#define DS2480_TIMEOUT (200 / portTICK_PERIOD_MS)
+#define DS2480_DETECT_ERROR_COUNT 5
+#define DS2480_BREAK_COUNT 10000
+const char * TAG= "hw_ow";
 
 /* Hardware abstraction */
 static inline int hw_write(uart_num_t uart_num,size_t size, void* buff) {return uart_write_bytes(uart_num, buff, size);}
-static inline int hw_read(uart_num_t uart_num,size_t size, void* buff) {return uart_read_bytes(uart_num, buff, size);}
+static inline int hw_read(uart_num_t uart_num,size_t size, void* buff) {return uart_read_bytes(uart_num, buff, size,DS2480_TIMEOUT);}
 
-static inline int hw_break(uart_num_t uart_num) {	return uart_write_bytes_with_break(uart_port_t uart_num, NULL, 0, 10000);}
-static inline void hw_flush(uart_num_t uart_num){  return uart_flush(uart_num);  }
+static inline int hw_break(uart_num_t uart_num) {	return uart_write_bytes_with_break(uart_num, NULL, 0, DS2480_BREAK_COUNT);}
+static inline void hw_flush(uart_num_t uart_num){  ESP_ERROR_CHECK( uart_flush(uart_num));  }
 
 //--------------------------------------------------------------------------
 // Set the baud rate on the com port.
@@ -53,11 +60,6 @@ static inline void hw_setbaud(uart_num_t uart_num,unsigned char new_baud)
 
 }
 
-/* Misc utility functions */
-static inline  unsigned char docrc8(unsigned char value);
-static inline  int bitacc(int op, int state, int loc, unsigned char* buf);
-
-
 
 
 
@@ -67,17 +69,22 @@ hw_ow_t*  hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio)
 {
 	/// @todo uart init, 1-wire prepare, allloc resourses
 
-	LastDiscrepancy = 0;
-	LastDeviceFlag = FALSE;
-	LastFamilyDiscrepancy = 0;
-
+	hw_ow_t*hw_ow = malloc(sizeof(hw_ow_t));
+	if(!hw_ow) return NULL;
 	// reset modes
-	UMode = MODSEL_COMMAND;
-	UBaud = PARMSET_9600;
-	USpeed = SPEEDSEL_FLEX;
-	ULevel = MODE_NORMAL;
+	hw_ow->UMode = MODSEL_COMMAND;
+	hw_ow->UBaud = PARMSET_9600;
+	hw_ow->USpeed = SPEEDSEL_FLEX;
+	hw_ow->ULevel = MODE_NORMAL;
 
-	crc8 = 0;
+
+	hw_ow->LastDiscrepancy = 0;
+	hw_ow->LastDeviceFlag = FALSE;
+	hw_ow->LastFamilyDiscrepancy = 0;
+
+	hw_ow->crc8 = 0;
+
+	return NULL;
 }
 
 //---------------------------------------------------------------------------
@@ -86,9 +93,9 @@ hw_ow_t*  hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio)
 // Returns:  TRUE  - DS2480B detected successfully
 //           FALSE - Could not detect DS2480B
 //
-int hw_ow_probe(void(hw_ow_t* hw_ow)
+int hw_ow_probe(hw_ow_t* hw_ow)
 {
-	INFO(F("DS2480B hw_ow_probeing..."));
+	ESP_LOGI(TAG, "DS2480B hw_ow_probeing...");
 
 	unsigned char sendpacket[10],readbuffer[10];
 	unsigned char sendlen=0;
@@ -97,18 +104,18 @@ int hw_ow_probe(void(hw_ow_t* hw_ow)
 	static bool firstInit = true;
 
 	// reset modes
-	UMode = MODSEL_COMMAND;
-	UBaud = PARMSET_9600;
-	USpeed = SPEEDSEL_FLEX;
+	hw_ow->UMode = MODSEL_COMMAND;
+	hw_ow->UBaud = PARMSET_9600;
+	hw_ow->USpeed = SPEEDSEL_FLEX;
 
 	// set the baud rate to 9600
-	SetBaudCOM((unsigned char)UBaud);
+	hw_setbaud(hw_ow->uart_num, (unsigned char)hw_ow->UBaud);
 
 	// send a break to reset the DS2480B
-	hw_break(hw_ow->uart_num,);
+	hw_break(hw_ow->uart_num);
 
 	// delay to let line settle
-	_delay_ms(20);
+	vTaskDelay( 20/ portTICK_PERIOD_MS );
 
 	// flush the buffers
 	hw_flush(hw_ow->uart_num);
@@ -117,12 +124,12 @@ int hw_ow_probe(void(hw_ow_t* hw_ow)
 	sendpacket[0] = 0xC5;//0xC1;
 	if (hw_write(hw_ow->uart_num,1,sendpacket) != 1)
 	{
-		CRITICAL(F("DS2480B_hw_ow_probe: DS2480B Not Answer"));
+		ESP_LOGE(TAG, "DS2480B_hw_ow_probe: DS2480B Not Answer");
 		return FALSE;
 	}
 
 	// delay to let line settle
-	_delay_ms(150);
+	vTaskDelay( 150/ portTICK_PERIOD_MS );
 
 	// set the FLEX configuration parameters
 	// default PDSRC = 1.37Vus
@@ -136,7 +143,7 @@ int hw_ow_probe(void(hw_ow_t* hw_ow)
 	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_PARMREAD | (PARMSEL_BAUDRATE >> 3); //0x0F
 
 	// also do 1 bit operation (to test 1-Wire block)
-	sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_BIT | UBaud | BITPOL_ONE; //0x91
+	sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_BIT | hw_ow->UBaud | BITPOL_ONE; //0x91
 
 	// flush the buffers
 	hw_flush(hw_ow->uart_num);
@@ -151,37 +158,36 @@ int hw_ow_probe(void(hw_ow_t* hw_ow)
 			// look at the baud rate and bit operation
 			// to see if the response makes sense
 			if (((readbuffer[3] & 0xF1) == 0x00) && //3
-					((readbuffer[3] & 0x0E) == UBaud) && //3
+					((readbuffer[3] & 0x0E) == hw_ow->UBaud) && //3
 					((readbuffer[4] & 0xF0) == 0x90) && //4
-					((readbuffer[4] & 0x0C) == UBaud)) //4
+					((readbuffer[4] & 0x0C) == hw_ow->UBaud)) //4
 			{
-				DEBUG(F("DS2480B hw_ow_probe: OK"));
+				ESP_LOGD(TAG, "DS2480B hw_ow_probe: OK");
 				errorCount = 0;
 				return TRUE;
 			}
-			else DEBUG(F("DS2480B hw_ow_probe: Read not math"));
+			else ESP_LOGD(TAG, "DS2480B hw_ow_probe: Read not math");
 		}
 		else
 		{
-			DEBUG(F("DS2480B hw_ow_probe: Read length not math"));
-			DATA(readLen);
+			ESP_LOGD(TAG, "DS2480B hw_ow_probe: Read length(%i) not math",readLen);
 		}
 	}
 
 #ifdef LEVEL_DATA
 	char buff[40];
 	sprintf(buff, "Recived msg is: %X, %X, %X, %X, %X", readbuffer[0],readbuffer[0],readbuffer[0],readbuffer[0],readbuffer[0]);
-	DATA(buff);
+	ESP_LOGV(TAG, buff);
 #endif
 
-	if(++errorCount == DETECT_ERROR_COUNT)
+	if(++errorCount == DS2480_DETECT_ERROR_COUNT)
 	{
 		errorCount = 0;
-		HardwareReset(( hw_ow);
+		hw_ow_hardware_reset(hw_ow);
 		firstInit = true;
 	}
-	if(firstInit) INFO(F("DS2480B: First initialize always without answer"));
-	else WARNING(F("DS2480B not detect or not response... :-("));
+	if(firstInit) ESP_LOGI(TAG, "DS2480B: First initialize always without answer");
+	else ESP_LOGW(TAG, "DS2480B not detect or not response... :-(");
 	firstInit = false;
 	return FALSE;
 }
@@ -204,15 +210,15 @@ int hw_ow_change_baud(hw_ow_t* hw_ow,unsigned char newbaud)
 	unsigned char sendlen=0,sendlen2=0;
 
 	// see if diffenent then current baud rate
-	if (UBaud == newbaud)
-		return UBaud;
+	if (hw_ow->UBaud == newbaud)
+		return hw_ow->UBaud;
 	else
 	{
 		// build the command packet
 		// check for correct mode
-		if (UMode != MODSEL_COMMAND)
+		if (hw_ow->UMode != MODSEL_COMMAND)
 		{
-			UMode = MODSEL_COMMAND;
+			hw_ow->UMode = MODSEL_COMMAND;
 			sendpacket[sendlen++] = MODE_COMMAND;
 		}
 		// build the command
@@ -227,14 +233,14 @@ int hw_ow_change_baud(hw_ow_t* hw_ow,unsigned char newbaud)
 		else
 		{
 			// make sure buffer is flushed
-			//_delay_ms(4);
+			//vTaskDelay( 4/ portTICK_PERIOD_MS );
 
 			// change our baud rate
-			SetBaudCOM(hw_ow,newbaud);
-			UBaud = newbaud;
+			hw_setbaud(hw_ow->uart_num,newbaud);
+			hw_ow->UBaud = newbaud;
 
 			// wait for things to settle
-			//_delay_ms(5);
+			//vTaskDelay( 5/ portTICK_PERIOD_MS );
 
 			// build a command packet to read back baud rate
 			sendpacket2[sendlen2++] = CMD_CONFIG | PARMSEL_PARMREAD | (PARMSEL_BAUDRATE >> 3);
@@ -245,7 +251,7 @@ int hw_ow_change_baud(hw_ow_t* hw_ow,unsigned char newbaud)
 			// send the packet
 			if (hw_write(hw_ow->uart_num,sendlen2,sendpacket2))
 			{
-				//_delay_ms(5);
+				//vTaskDelay( 5/ portTICK_PERIOD_MS );
 				// read back the 1 byte response
 				if (hw_read(hw_ow->uart_num,1,readbuffer) == 1)
 				{
@@ -253,9 +259,9 @@ int hw_ow_change_baud(hw_ow_t* hw_ow,unsigned char newbaud)
 					if (((readbuffer[0] & 0x0E) == (sendpacket[sendlen-1] & 0x0E)))
 						rt = TRUE;
 
-					else DEBUG(F("response error"));
+					else ESP_LOGD(TAG, "response error");
 				}
-				else DEBUG(F("Read error"));
+				else ESP_LOGD(TAG, "Read error");
 			}
 		}
 	}
@@ -264,27 +270,31 @@ int hw_ow_change_baud(hw_ow_t* hw_ow,unsigned char newbaud)
 	if (rt != TRUE)
 		hw_ow_probe(hw_ow);
 
-	return UBaud;
+	return hw_ow->UBaud;
 }
 
 void hw_ow_hardware_reset(hw_ow_t* hw_ow)
 {
-	CRITICAL(F("DS2480B HardwareReset, because it not answered several times"));
+	ESP_LOGE(TAG, "DS2480B HardwareReset, because it not answered several times");
 /** @todo turn hw_en disable */
 	// DALL_PWR_DDR |= (1<<DALL_PWR_PIN);
 	// DALL_PWR_PORT &= ~(1<<DALL_PWR_PIN);
-	// _delay_ms(1000);
+	// vTaskDelay( 1000/ portTICK_PERIOD_MS );
 	// DALL_PWR_DDR &= ~(1<<DALL_PWR_PIN);
-	// _delay_ms(30);
+	// vTaskDelay( 30/ portTICK_PERIOD_MS );
 }
 
 void hw_ow_delete(hw_ow_t* hw_ow){
-	
+  /** @todo */
 }
 
 //---------------------------------------------------------------------------
 //-------- Basic 1-Wire functions
 //---------------------------------------------------------------------------
+
+/* Misc utility functions */
+static inline  void ow_crc(hw_ow_t * hw_ow,unsigned char value);
+static inline  int bitacc(int op, int state, int loc, unsigned char* buf);
 
 //--------------------------------------------------------------------------
 // Reset all of the devices on the 1-Wire Net and return the result.
@@ -298,24 +308,24 @@ void hw_ow_delete(hw_ow_t* hw_ow){
 //          Rev 1,2, and 3 of the DS2480/DS2480B.
 //
 //
-int OWReset(hw_ow_t* hw_ow,void)
+int OWReset(hw_ow_t* hw_ow)
 {
-	DATA(F("OWReset"));
+	ESP_LOGV(TAG, "OWReset");
 	unsigned char readbuffer[10],sendpacket[10];
 	unsigned char sendlen=0;
 
 	// make sure normal level
-	OWLevel(MODE_NORMAL);
+	OWLevel(hw_ow,MODE_NORMAL);
 
 	// check for correct mode
-	if (UMode != MODSEL_COMMAND)
+	if (hw_ow->UMode != MODSEL_COMMAND)
 	{
-		UMode = MODSEL_COMMAND;
+		hw_ow->UMode = MODSEL_COMMAND;
 		sendpacket[sendlen++] = MODE_COMMAND;
 	}
 
 	// construct the command
-	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_RESET | USpeed);
+	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_RESET |hw_ow->USpeed);
 
 	// flush the buffers
 	hw_flush(hw_ow->uart_num);
@@ -326,7 +336,7 @@ int OWReset(hw_ow_t* hw_ow,void)
 		// read back the 1 byte response
 		if (hw_read(hw_ow->uart_num,1,readbuffer) == 1)
 		{
-			//_delay_ms(5); // delay 5 ms to give DS1994 enough time
+			//vTaskDelay( 5/ portTICK_PERIOD_MS ); // delay 5 ms to give DS1994 enough time
 			hw_flush(hw_ow->uart_num);
 			//return TRUE;
 
@@ -336,10 +346,10 @@ int OWReset(hw_ow_t* hw_ow,void)
 					((readbuffer[0] & RB_RESET_MASK) == RB_ALARMPRESENCE))
 				return TRUE;
 		}
-		else DEBUG(F("Read error"));
+		else ESP_LOGD(TAG, "Read error");
 	}
 
-	WARNING(F("An error occurred so re-sync with DS2480B"));
+	ESP_LOGW(TAG, "An error occurred so re-sync with DS2480B");
 	// an error occurred so re-sync with DS2480B
 	hw_ow_probe(hw_ow);
 
@@ -354,7 +364,7 @@ int OWReset(hw_ow_t* hw_ow,void)
 //
 void OWWriteBit(hw_ow_t* hw_ow,unsigned char sendbit)
 {
-	OWTouchBit(sendbit);
+	OWTouchBit(hw_ow,sendbit);
 }
 
 //--------------------------------------------------------------------------
@@ -363,9 +373,9 @@ void OWWriteBit(hw_ow_t* hw_ow,unsigned char sendbit)
 //
 // Returns:  8 bits read from 1-Wire Net
 //
-unsigned char OWReadBit(hw_ow_t* hw_ow,void)
+unsigned char OWReadBit(hw_ow_t* hw_ow)
 {
-	return OWTouchBit(0x01);
+	return OWTouchBit(hw_ow,0x01);
 }
 
 //--------------------------------------------------------------------------
@@ -381,23 +391,23 @@ unsigned char OWReadBit(hw_ow_t* hw_ow,void)
 //
 unsigned char OWTouchBit(hw_ow_t* hw_ow,unsigned char sendbit)
 {
-	DATA("OWTouchBit");
+	ESP_LOGV(TAG, "OWTouchBit");
 	unsigned char readbuffer[10],sendpacket[10];
 	unsigned char sendlen=0;
 
 	// make sure normal level
-	OWLevel(MODE_NORMAL);
+	OWLevel(hw_ow,MODE_NORMAL);
 
 	// check for correct mode
-	if (UMode != MODSEL_COMMAND)
+	if (hw_ow->UMode != MODSEL_COMMAND)
 	{
-		UMode = MODSEL_COMMAND;
+		hw_ow->UMode = MODSEL_COMMAND;
 		sendpacket[sendlen++] = MODE_COMMAND;
 	}
 
 	// construct the command
 	sendpacket[sendlen] = (sendbit != 0) ? BITPOL_ONE : BITPOL_ZERO;
-	sendpacket[sendlen++] |= CMD_COMM | FUNCTSEL_BIT | USpeed;
+	sendpacket[sendlen++] |= CMD_COMM | FUNCTSEL_BIT |hw_ow->USpeed;
 
 	// flush the buffers
 	hw_flush(hw_ow->uart_num);
@@ -415,10 +425,10 @@ unsigned char OWTouchBit(hw_ow_t* hw_ow,unsigned char sendbit)
 			else
 				return 0;
 		}
-		else DEBUG(F("Read error"));
+		else ESP_LOGD(TAG, "Read error");
 	}
 
-	WARNING(F("OWTouchBit: An error occured so re-sync with DS2480B"));
+	ESP_LOGW(TAG, "OWTouchBit: An error occured so re-sync with DS2480B");
 	// an error occured so re-sync with DS2480B
 	hw_ow_probe(hw_ow);
 
@@ -437,7 +447,7 @@ unsigned char OWTouchBit(hw_ow_t* hw_ow,unsigned char sendbit)
 //
 void OWWriteByte(hw_ow_t* hw_ow,unsigned char sendbyte)
 {
-	OWTouchByte(sendbyte);
+	OWTouchByte(hw_ow, sendbyte);
 }
 
 //--------------------------------------------------------------------------
@@ -446,9 +456,9 @@ void OWWriteByte(hw_ow_t* hw_ow,unsigned char sendbyte)
 //
 // Returns:  8 bits read from 1-Wire Net
 //
-unsigned char OWReadByte(hw_ow_t* hw_ow,void)
+unsigned char OWReadByte(hw_ow_t* hw_ow)
 {
-	return OWTouchByte(0xFF);
+	return OWTouchByte(hw_ow, 0xFF);
 }
 
 //--------------------------------------------------------------------------
@@ -463,17 +473,17 @@ unsigned char OWReadByte(hw_ow_t* hw_ow,void)
 //
 unsigned char OWTouchByte(hw_ow_t* hw_ow,unsigned char sendbyte)
 {
-	DATA(F("OWTouchByte"));
+	ESP_LOGV(TAG, "OWTouchByte");
 	unsigned char readbuffer[10],sendpacket[10];
 	unsigned char sendlen=0;
 
 	// make sure normal level
-	OWLevel(MODE_NORMAL);
+	OWLevel(hw_ow,MODE_NORMAL);
 
 	// check for correct mode
-	if (UMode != MODSEL_DATA)
+	if (hw_ow->UMode != MODSEL_DATA)
 	{
-		UMode = MODSEL_DATA;
+		hw_ow->UMode = MODSEL_DATA;
 		sendpacket[sendlen++] = MODE_DATA;
 	}
 
@@ -496,10 +506,10 @@ unsigned char OWTouchByte(hw_ow_t* hw_ow,unsigned char sendbyte)
 			// return the response
 			return readbuffer[0];
 		}
-		else DEBUG(F("Read error"));
+		else ESP_LOGD(TAG, "Read error");
 	}
 
-	WARNING(F("OWTouchByte: An error occured so re-sync with DS2480B"));
+	ESP_LOGW(TAG, "OWTouchByte: An error occured so re-sync with DS2480B");
 	// an error occured so re-sync with DS2480B
 	hw_ow_probe(hw_ow);
 
@@ -522,7 +532,7 @@ unsigned char OWTouchByte(hw_ow_t* hw_ow,unsigned char sendbyte)
 //
 int OWBlock(hw_ow_t* hw_ow,unsigned char *tran_buf, int tran_len)
 {
-	DATA(F("OWBlock"));
+	ESP_LOGV(TAG, "OWBlock");
 
 	unsigned char sendpacket[320];
 	unsigned char sendlen=0;
@@ -533,9 +543,9 @@ int OWBlock(hw_ow_t* hw_ow,unsigned char *tran_buf, int tran_len)
 
 	// construct the packet to send to the DS2480B
 	// check for correct mode
-	if (UMode != MODSEL_DATA)
+	if (hw_ow->UMode != MODSEL_DATA)
 	{
-		UMode = MODSEL_DATA;
+		hw_ow->UMode = MODSEL_DATA;
 		sendpacket[sendlen++] = MODE_DATA;
 	}
 
@@ -560,10 +570,10 @@ int OWBlock(hw_ow_t* hw_ow,unsigned char *tran_buf, int tran_len)
 		{
 			return TRUE;
 		}
-		else DEBUG(F("Read error"));
+		else ESP_LOGD(TAG, "Read error");
 	}
 
-	WARNING(F("OWBlock: An error occured so re-sync with DS2480B"));
+	ESP_LOGW(TAG, "OWBlock: An error occured so re-sync with DS2480B");
 	// an error occured so re-sync with DS2480B
 	hw_ow_probe(hw_ow);
 
@@ -572,61 +582,61 @@ int OWBlock(hw_ow_t* hw_ow,unsigned char *tran_buf, int tran_len)
 
 //--------------------------------------------------------------------------
 // Find the 'first' devices on the 1-Wire bus
-// Return TRUE  : device found, ROM number in ROM_NO buffer
+// Return TRUE  : device found, ROM number in rom buffer
 //        FALSE : no device present
 //
-int OWFirst(hw_ow_t* hw_ow,)
+int OWFirst(hw_ow_t* hw_ow)
 {
-	DATA(F("OWFirst - reset the search state"));
+	ESP_LOGV(TAG, "OWFirst - reset the search state");
 	// reset the search state
-	LastDiscrepancy = 0;
-	LastDeviceFlag = FALSE;
-	LastFamilyDiscrepancy = 0;
+	hw_ow->LastDiscrepancy = 0;
+	hw_ow->LastDeviceFlag = FALSE;
+	hw_ow->LastFamilyDiscrepancy = 0;
 
-	return OWSearch();
+	return OWSearch(hw_ow);
 }
 
 //--------------------------------------------------------------------------
 // Find the 'next' devices on the 1-Wire bus
-// Return TRUE  : device found, ROM number in ROM_NO buffer
+// Return TRUE  : device found, ROM number in rom buffer
 //        FALSE : device not found, end of search
 //
-int OWNext(hw_ow_t* hw_ow,)
+int OWNext(hw_ow_t* hw_ow)
 {
-	DATA(F("OWNext - leave the search state alone"));
+	ESP_LOGV(TAG, "OWNext - leave the search state alone");
 	// leave the search state alone
-	return OWSearch();
+	return OWSearch(hw_ow);
 }
 
 //--------------------------------------------------------------------------
-// Verify the device with the ROM number in ROM_NO buffer is present.
+// Verify the device with the ROM number in rom buffer is present.
 // Return TRUE  : device verified present
 //        FALSE : device not present
 //
-int OWVerify(hw_ow_t* hw_ow,)
+int OWVerify(hw_ow_t* hw_ow)
 {
-	DATA(F("OWVerify"));
+	ESP_LOGV(TAG, "OWVerify");
 	unsigned char rom_backup[8];
 	int i,rslt,ld_backup,ldf_backup,lfd_backup;
 
 	// keep a backup copy of the current state
 	for (i = 0; i < 8; i++)
-		rom_backup[i] = ROM_NO[i];
-	ld_backup = LastDiscrepancy;
-	ldf_backup = LastDeviceFlag;
-	lfd_backup = LastFamilyDiscrepancy;
+		rom_backup[i] = hw_ow->rom.no[i];
+	ld_backup = hw_ow->LastDiscrepancy;
+	ldf_backup = hw_ow->LastDeviceFlag;
+	lfd_backup = hw_ow->LastFamilyDiscrepancy;
 
 	// set search to find the same device
-	LastDiscrepancy = 64;
-	LastDeviceFlag = FALSE;
+	hw_ow->LastDiscrepancy = 64;
+	hw_ow->LastDeviceFlag = FALSE;
 
-	if (OWSearch())
+	if (OWSearch(hw_ow))
 	{
 		// check if same device found
 		rslt = TRUE;
 		for (i = 0; i < 8; i++)
 		{
-			if (rom_backup[i] != ROM_NO[i])
+			if (rom_backup[i] != hw_ow->rom.no[i])
 			{
 				rslt = FALSE;
 				break;
@@ -636,16 +646,16 @@ int OWVerify(hw_ow_t* hw_ow,)
 	else
 	{
 
-		DEBUG(F("Search error when verify"));
+		ESP_LOGD(TAG, "Search error when verify");
 		rslt = FALSE;
 	}
 
 	// restore the search state
 	for (i = 0; i < 8; i++)
-		ROM_NO[i] = rom_backup[i];
-	LastDiscrepancy = ld_backup;
-	LastDeviceFlag = ldf_backup;
-	LastFamilyDiscrepancy = lfd_backup;
+		hw_ow->rom.no[i] = rom_backup[i];
+	hw_ow->LastDiscrepancy = ld_backup;
+	hw_ow->LastDeviceFlag = ldf_backup;
+	hw_ow->LastFamilyDiscrepancy = lfd_backup;
 
 	// return the result of the verify
 	return rslt;
@@ -657,33 +667,32 @@ int OWVerify(hw_ow_t* hw_ow,)
 //
 void OWTargetSetup(hw_ow_t* hw_ow,unsigned char family_code)
 {
-	DATA(F("OWTargetSetup"));
-	DATA(family_code);
+	ESP_LOGV(TAG, "OWTargetSetup. Family code: %u",family_code);
 
 	// set the search state to find SearchFamily type devices
-	ROM_NO[0] = family_code;
-	for (auto i = 1; i < 8; i++)
-		ROM_NO[i] = 0;
-	LastDiscrepancy = 64;
-	LastFamilyDiscrepancy = 0;
-	LastDeviceFlag = FALSE;
+	hw_ow->rom.no[0] = family_code;
+	for (unsigned char i = 1; i < 8; i++)
+		hw_ow->rom.no[i] = 0;
+	hw_ow->LastDiscrepancy = 64;
+	hw_ow->LastFamilyDiscrepancy = 0;
+	hw_ow->LastDeviceFlag = FALSE;
 }
 
 //--------------------------------------------------------------------------
 // Setup the search to skip the current device type on the next call
 // to OWNext().
 //
-void OWFamilySkipSetup(hw_ow_t* hw_ow,)
+void OWFamilySkipSetup(hw_ow_t* hw_ow)
 {
 	// set the Last discrepancy to last family discrepancy
-	LastDiscrepancy = LastFamilyDiscrepancy;
+	hw_ow->LastDiscrepancy = hw_ow->LastFamilyDiscrepancy;
 
 	// clear the last family discrpepancy
-	LastFamilyDiscrepancy = 0;
+	hw_ow->LastFamilyDiscrepancy = 0;
 
 	// check for end of list
-	if (LastDiscrepancy == 0)
-		LastDeviceFlag = TRUE;
+	if (hw_ow->LastDiscrepancy == 0)
+		hw_ow->LastDeviceFlag = TRUE;
 
 }
 
@@ -703,9 +712,9 @@ void OWFamilySkipSetup(hw_ow_t* hw_ow,)
 //                       last search was the last device or there
 //                       are no devices on the 1-Wire Net.
 //
-int OWSearch(hw_ow_t* hw_ow,void)
+int OWSearch(hw_ow_t* hw_ow)
 {
-	DATA(F("OWSearch"));
+	ESP_LOGV(TAG, "OWSearch");
 
 	unsigned char last_zero,pos;
 	unsigned char tmp_rom[8];
@@ -713,34 +722,34 @@ int OWSearch(hw_ow_t* hw_ow,void)
 	unsigned char i,sendlen=0;
 
 	// if the last call was the last one
-	if (LastDeviceFlag)
+	if (hw_ow->LastDeviceFlag)
 	{
-		DATA(F("OWSearch: the last call was the last one"));
+		ESP_LOGV(TAG, "OWSearch: the last call was the last one");
 		// reset the search
-		LastDiscrepancy = 0;
-		LastDeviceFlag = FALSE;
-		LastFamilyDiscrepancy = 0;
+		hw_ow->LastDiscrepancy = 0;
+		hw_ow->LastDeviceFlag = FALSE;
+		hw_ow->LastFamilyDiscrepancy = 0;
 		return FALSE;
 	}
 
 	// reset the 1-wire
 	// if there are no parts on 1-wire, return FALSE
-	if (!OWReset())
+	if (!OWReset(hw_ow))
 	{
-		DEBUG(F("OWSearch: there are no parts on 1-wire, return FALSE"));
+		ESP_LOGD(TAG, "OWSearch: there are no parts on 1-wire, return FALSE");
 		// reset the search
-		LastDiscrepancy = 0;
-		LastFamilyDiscrepancy = 0;
+		hw_ow->LastDiscrepancy = 0;
+		hw_ow->LastFamilyDiscrepancy = 0;
 		return FALSE;
 	}
 
 	// build the command stream
 	// call a function that may add the change mode command to the buff
 	// check for correct mode
-	if (UMode != MODSEL_DATA)
+	if (hw_ow->UMode != MODSEL_DATA)
 	{
-		DATA(F("OWSearch: UMode != MODSEL_DATA"));
-		UMode = MODSEL_DATA;
+		ESP_LOGV(TAG, "OWSearch: hw_ow->UMode != MODSEL_DATA");
+		hw_ow->UMode = MODSEL_DATA;
 		sendpacket[sendlen++] = MODE_DATA;
 	}
 
@@ -748,14 +757,14 @@ int OWSearch(hw_ow_t* hw_ow,void)
 	sendpacket[sendlen++] = 0xF0;
 
 	// change back to command mode
-	UMode = MODSEL_COMMAND;
+	hw_ow->UMode = MODSEL_COMMAND;
 	sendpacket[sendlen++] = MODE_COMMAND;
 
 	// search mode on
-	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_SEARCHON | USpeed);
+	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_SEARCHON |hw_ow->USpeed);
 
 	// change back to data mode
-	UMode = MODSEL_DATA;
+	hw_ow->UMode = MODSEL_DATA;
 	sendpacket[sendlen++] = MODE_DATA;
 
 	// set the temp Last Discrepancy to 0
@@ -767,20 +776,20 @@ int OWSearch(hw_ow_t* hw_ow,void)
 		sendpacket[sendlen++] = 0;
 
 	// only modify bits if not the first search
-	if (LastDiscrepancy != 0)
+	if (hw_ow->LastDiscrepancy != 0)
 	{
-		DATA(F("OWSearch: LastDiscrepancy != 0"));
+		ESP_LOGV(TAG, "OWSearch: hw_ow->LastDiscrepancy != 0");
 		// set the bits in the added buffer
 		for (i = 0; i < 64; i++)
 		{
 			// before last discrepancy
-			if (i < (LastDiscrepancy - 1))
+			if (i < (hw_ow->LastDiscrepancy - 1))
 				bitacc(WRITE_FUNCTION,
-						bitacc(READ_FUNCTION,0,i,&ROM_NO[0]),
+						bitacc(READ_FUNCTION,0,i,&hw_ow->rom.no[0]),
 						(short)(i * 2 + 1),
 						&sendpacket[pos]);
 			// at last discrepancy
-			else if (i == (LastDiscrepancy - 1))
+			else if (i == (hw_ow->LastDiscrepancy - 1))
 				bitacc(WRITE_FUNCTION,1,(short)(i * 2 + 1),
 						&sendpacket[pos]);
 			// after last discrepancy so leave zeros
@@ -788,11 +797,11 @@ int OWSearch(hw_ow_t* hw_ow,void)
 	}
 
 	// change back to command mode
-	UMode = MODSEL_COMMAND;
+	hw_ow->UMode = MODSEL_COMMAND;
 	sendpacket[sendlen++] = MODE_COMMAND;
 
 	// search OFF command
-	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_SEARCHOFF | USpeed);
+	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_SEARCHOFF |hw_ow->USpeed);
 
 	// flush the buffers
 	hw_flush(hw_ow->uart_num);
@@ -810,59 +819,59 @@ int OWSearch(hw_ow_t* hw_ow,void)
 				bitacc(WRITE_FUNCTION,
 						bitacc(READ_FUNCTION,0,(short)(i * 2 + 1),&readbuffer[1]),i,
 						&tmp_rom[0]);
-				// check LastDiscrepancy
+				// check hw_ow->LastDiscrepancy
 				if ((bitacc(READ_FUNCTION,0,(short)(i * 2),&readbuffer[1]) == 1) &&
 						(bitacc(READ_FUNCTION,0,(short)(i * 2 + 1),&readbuffer[1]) == 0))
 				{
 					last_zero = i + 1;
-					// check LastFamilyDiscrepancy
+					// check hw_ow->LastFamilyDiscrepancy
 					if (i < 8)
-						LastFamilyDiscrepancy = i + 1;
+						hw_ow->LastFamilyDiscrepancy = i + 1;
 				}
 			}
 
 			// do dowcrc
-			crc8 = 0;
+			hw_ow->crc8 = 0;
 			for (i = 0; i < 8; i++)
-				docrc8(tmp_rom[i]);
+				ow_crc(hw_ow,tmp_rom[i]);
 
 			// check results
-			if ((crc8 != 0) || (LastDiscrepancy == 63) || (tmp_rom[0] == 0))
+			if ((hw_ow->crc8 != 0) || (hw_ow->LastDiscrepancy == 63) || (tmp_rom[0] == 0))
 			{
 				// error during search
 				// reset the search
-				LastDiscrepancy = 0;
-				LastDeviceFlag = FALSE;
-				LastFamilyDiscrepancy = 0;
+				hw_ow->LastDiscrepancy = 0;
+				hw_ow->LastDeviceFlag = FALSE;
+				hw_ow->LastFamilyDiscrepancy = 0;
 				return FALSE;
 			}
 			// successful search
 			else
 			{
 				// set the last discrepancy
-				LastDiscrepancy = last_zero;
+				hw_ow->LastDiscrepancy = last_zero;
 
 				// check for last device
-				if (LastDiscrepancy == 0)
-					LastDeviceFlag = TRUE;
+				if (hw_ow->LastDiscrepancy == 0)
+					hw_ow->LastDeviceFlag = TRUE;
 
 				// copy the ROM to the buffer
 				for (i = 0; i < 8; i++)
-					ROM_NO[i] = tmp_rom[i];
+					hw_ow->rom.no[i] = tmp_rom[i];
 
 				return TRUE;
 			}
 		}
 	}
 
-	WARNING(F("OWSearch: an error occured so re-sync with DS2480B"));
+	ESP_LOGW(TAG, "OWSearch: an error occured so re-sync with DS2480B");
 	// an error occured so re-sync with DS2480B
 	hw_ow_probe(hw_ow);
 
 	// reset the search
-	LastDiscrepancy = 0;
-	LastDeviceFlag = FALSE;
-	LastFamilyDiscrepancy = 0;
+	hw_ow->LastDiscrepancy = 0;
+	hw_ow->LastDeviceFlag = FALSE;
+	hw_ow->LastFamilyDiscrepancy = 0;
 
 	return FALSE;
 }
@@ -882,23 +891,23 @@ int OWSearch(hw_ow_t* hw_ow,void)
 //
 int OWSpeed(hw_ow_t* hw_ow,int new_speed)
 {
-	DATA("OWSpeed");
+	ESP_LOGV(TAG, "OWSpeed");
 	unsigned char sendpacket[5];
 	unsigned char sendlen=0;
 	unsigned char rt = FALSE;
 
 	// check if change from current mode
 	if (((new_speed == MODE_OVERDRIVE) &&
-			(USpeed != SPEEDSEL_OD)) ||
+			(hw_ow->USpeed != SPEEDSEL_OD)) ||
 			((new_speed == MODE_NORMAL) &&
-					(USpeed != SPEEDSEL_FLEX)))
+					(hw_ow->USpeed != SPEEDSEL_FLEX)))
 	{
 		if (new_speed == MODE_OVERDRIVE)
 		{
 			// if overdrive then switch to 115200 baud
-			if (ChangeBaud(hw_owMAX_BAUD) == MAX_BAUD)
+			if (hw_ow_change_baud(hw_ow,MAX_BAUD) == MAX_BAUD)
 			{
-				USpeed = SPEEDSEL_OD;
+				hw_ow->USpeed = SPEEDSEL_OD;
 				rt = TRUE;
 			}
 
@@ -906,9 +915,9 @@ int OWSpeed(hw_ow_t* hw_ow,int new_speed)
 		else if (new_speed == MODE_NORMAL)
 		{
 			// else normal so set to 9600 baud
-			if (ChangeBaud(hw_owPARMSET_9600) == PARMSET_9600)
+			if (hw_ow_change_baud(hw_ow,PARMSET_9600) == PARMSET_9600)
 			{
-				USpeed = SPEEDSEL_FLEX;
+				hw_ow->USpeed = SPEEDSEL_FLEX;
 				rt = TRUE;
 			}
 
@@ -918,20 +927,20 @@ int OWSpeed(hw_ow_t* hw_ow,int new_speed)
 		if (rt)
 		{
 			// check for correct mode
-			if (UMode != MODSEL_COMMAND)
+			if (hw_ow->UMode != MODSEL_COMMAND)
 			{
-				UMode = MODSEL_COMMAND;
+				hw_ow->UMode = MODSEL_COMMAND;
 				sendpacket[sendlen++] = MODE_COMMAND;
 			}
 
 			// proceed to set the DS2480B communication speed
-			sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_SEARCHOFF | USpeed;
+			sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_SEARCHOFF |hw_ow->USpeed;
 
 			// send the packet
 			if (!hw_write(hw_ow->uart_num,sendlen,sendpacket))
 			{
 				rt = FALSE;
-				WARNING(F("OWSpeed - lost communication with DS2480B then reset"));
+				ESP_LOGW(TAG, "OWSpeed - lost communication with DS2480B then reset");
 				// lost communication with DS2480B then reset
 				hw_ow_probe(hw_ow);
 			}
@@ -940,7 +949,7 @@ int OWSpeed(hw_ow_t* hw_ow,int new_speed)
 	}
 
 	// return the current speed
-	return (USpeed == SPEEDSEL_OD) ? MODE_OVERDRIVE : MODE_NORMAL;
+	return (hw_ow->USpeed == SPEEDSEL_OD) ? MODE_OVERDRIVE : MODE_NORMAL;
 }
 
 //--------------------------------------------------------------------------
@@ -955,20 +964,19 @@ int OWSpeed(hw_ow_t* hw_ow,int new_speed)
 //
 int OWLevel(hw_ow_t* hw_ow,int new_level)
 {
-	DATA("OWLevel");
-	DATA(new_level);
+	ESP_LOGV(TAG, "OWLevel: %i",new_level);
 
 	unsigned char sendpacket[10],readbuffer[10];
 	unsigned char sendlen=0;
 	unsigned char rt=FALSE;//,docheck=FALSE;
 
 	// check if need to change level
-	if (new_level != ULevel)
+	if (new_level != hw_ow->ULevel)
 	{
 		// check for correct mode
-		if (UMode != MODSEL_COMMAND)
+		if (hw_ow->UMode != MODSEL_COMMAND)
 		{
-			UMode = MODSEL_COMMAND;
+			hw_ow->UMode = MODSEL_COMMAND;
 			sendpacket[sendlen++] = MODE_COMMAND;
 		}
 
@@ -976,7 +984,7 @@ int OWLevel(hw_ow_t* hw_ow,int new_level)
 		if (new_level == MODE_NORMAL)
 		{
 			//			// check for disable strong pullup step
-			//			if (ULevel == MODE_STRONG5)
+			//			if (hw_ow->ULevel == MODE_STRONG5)
 			//				docheck = TRUE;
 
 			// stop pulse command
@@ -1001,11 +1009,11 @@ int OWLevel(hw_ow_t* hw_ow,int new_level)
 					if (((readbuffer[0] & 0xE0) == 0xE0) && ((readbuffer[1] & 0xE0) == 0xE0))
 					{
 						rt = TRUE;
-						ULevel = MODE_NORMAL;
+						hw_ow->ULevel = MODE_NORMAL;
 
 					}
 
-					else DEBUG(F("Read error"));
+					else ESP_LOGD(TAG, "Read error");
 				}
 			}
 		}
@@ -1029,10 +1037,10 @@ int OWLevel(hw_ow_t* hw_ow,int new_level)
 					// check response byte
 					if ((readbuffer[0] & 0x81) == 0)
 					{
-						ULevel = new_level;
+						hw_ow->ULevel = new_level;
 						rt = TRUE;
 					}
-					else DEBUG(F("Read error"));
+					else ESP_LOGD(TAG, "Read error");
 				}
 			}
 		}
@@ -1040,13 +1048,13 @@ int OWLevel(hw_ow_t* hw_ow,int new_level)
 		// if lost communication with DS2480B then reset
 		if (rt != TRUE)
 		{
-			WARNING(F("OWLevel - lost communication with DS2480B then reset"));
+			ESP_LOGW(TAG, "OWLevel - lost communication with DS2480B then reset");
 			hw_ow_probe(hw_ow);
 		}
 	}
 
 	// return the current level
-	return ULevel;
+	return hw_ow->ULevel;
 }
 
 //--------------------------------------------------------------------------
@@ -1056,20 +1064,20 @@ int OWLevel(hw_ow_t* hw_ow,int new_level)
 // Returns:  TRUE  successful
 //           FALSE program voltage not available
 //
-int OWProgramPulse(hw_ow_t* hw_ow,void)
+int OWProgramPulse(hw_ow_t* hw_ow)
 {
-	DATA(F("OWProgramPulse"));
+	ESP_LOGV(TAG, "OWProgramPulse");
 
 	unsigned char sendpacket[10],readbuffer[10];
 	unsigned char sendlen=0;
 
 	// make sure normal level
-	OWLevel(MODE_NORMAL);
+	OWLevel(hw_ow, MODE_NORMAL);
 
 	// check for correct mode
-	if (UMode != MODSEL_COMMAND)
+	if (hw_ow->UMode != MODSEL_COMMAND)
 	{
-		UMode = MODSEL_COMMAND;
+		hw_ow->UMode = MODSEL_COMMAND;
 		sendpacket[sendlen++] = MODE_COMMAND;
 	}
 
@@ -1095,11 +1103,11 @@ int OWProgramPulse(hw_ow_t* hw_ow,void)
 							(0xFC & (CMD_COMM | FUNCTSEL_CHMOD | BITPOL_12V | SPEEDSEL_PULSE))))
 				return TRUE;
 		}
-		else DEBUG(F("Read error"));
+		else ESP_LOGD(TAG, "Read error");
 	}
 
 	// an error occured so re-sync with DS2480B
-	WARNING(F("OWProgramPulse - lost communication with DS2480B then reset"));
+	ESP_LOGW(TAG, "OWProgramPulse - lost communication with DS2480B then reset");
 	hw_ow_probe(hw_ow);
 
 	return FALSE;
@@ -1118,7 +1126,7 @@ int OWProgramPulse(hw_ow_t* hw_ow,void)
 //
 int OWWriteBytePower(hw_ow_t* hw_ow,int sendbyte)
 {
-	DATA(F("OWWriteBytePower"));
+	ESP_LOGV(TAG, "OWWriteBytePower");
 
 	unsigned char sendpacket[10],readbuffer[10];
 	unsigned char sendlen=0;
@@ -1126,9 +1134,9 @@ int OWWriteBytePower(hw_ow_t* hw_ow,int sendbyte)
 	unsigned char i, temp_byte;
 
 	// check for correct mode
-	if (UMode != MODSEL_COMMAND)
+	if (hw_ow->UMode != MODSEL_COMMAND)
 	{
-		UMode = MODSEL_COMMAND;
+		hw_ow->UMode = MODSEL_COMMAND;
 		sendpacket[sendlen++] = MODE_COMMAND;
 	}
 
@@ -1141,7 +1149,7 @@ int OWWriteBytePower(hw_ow_t* hw_ow,int sendbyte)
 	for (i = 0; i < 8; i++)
 	{
 		sendpacket[sendlen++] = ((temp_byte & 0x01) ? BITPOL_ONE : BITPOL_ZERO)
-                            																						  | CMD_COMM | FUNCTSEL_BIT | USpeed |
+                            																						  | CMD_COMM | FUNCTSEL_BIT |hw_ow->USpeed |
 																													  ((i == 7) ? PRIME5V_TRUE : PRIME5V_FALSE);
 		temp_byte >>= 1;
 	}
@@ -1159,7 +1167,7 @@ int OWWriteBytePower(hw_ow_t* hw_ow,int sendbyte)
 			if ((readbuffer[0] & 0x81) == 0)
 			{
 				// indicate the port is now at power delivery
-				ULevel = MODE_STRONG5;
+				hw_ow->ULevel = MODE_STRONG5;
 
 				// reconstruct the echo byte
 				temp_byte = 0;
@@ -1172,15 +1180,15 @@ int OWWriteBytePower(hw_ow_t* hw_ow,int sendbyte)
 				if (temp_byte == sendbyte)
 					rt = TRUE;
 			}
-			else DEBUG(F("response error"));
+			else ESP_LOGD(TAG, "response error");
 		}
-		else DEBUG(F("Read error"));
+		else ESP_LOGD(TAG, "Read error");
 	}
 
 	// if lost communication with DS2480B then reset
 	if (rt != TRUE)
 	{
-		WARNING(F("OWWriteBytePower - lost communication with DS2480B then reset"));
+		ESP_LOGW(TAG, "OWWriteBytePower - lost communication with DS2480B then reset");
 		hw_ow_probe(hw_ow);
 	}
 
@@ -1201,15 +1209,15 @@ int OWWriteBytePower(hw_ow_t* hw_ow,int sendbyte)
 //
 int OWReadBitPower(hw_ow_t* hw_ow,int applyPowerResponse)
 {
-	DATA(F("OWReadBitPower"));
+	ESP_LOGV(TAG, "OWReadBitPower");
 	unsigned char sendpacket[3],readbuffer[3];
 	unsigned char sendlen=0;
 	unsigned char rt=FALSE;
 
 	// check for correct mode
-	if (UMode != MODSEL_COMMAND)
+	if (hw_ow->UMode != MODSEL_COMMAND)
 	{
-		UMode = MODSEL_COMMAND;
+		hw_ow->UMode = MODSEL_COMMAND;
 		sendpacket[sendlen++] = MODE_COMMAND;
 	}
 
@@ -1218,7 +1226,7 @@ int OWReadBitPower(hw_ow_t* hw_ow,int applyPowerResponse)
 
 	// enabling the strong-pullup after bit
 	sendpacket[sendlen++] = BITPOL_ONE
-			| CMD_COMM | FUNCTSEL_BIT | USpeed |
+			| CMD_COMM | FUNCTSEL_BIT |hw_ow->USpeed |
 			PRIME5V_TRUE;
 	// flush the buffers
 	hw_flush(hw_ow->uart_num);
@@ -1233,25 +1241,25 @@ int OWReadBitPower(hw_ow_t* hw_ow,int applyPowerResponse)
 			if ((readbuffer[0] & 0x81) == 0)
 			{
 				// indicate the port is now at power delivery
-				ULevel = MODE_STRONG5;
+				hw_ow->ULevel = MODE_STRONG5;
 
 				// check the response bit
 				if ((readbuffer[1] & 0x01) == applyPowerResponse)
 					rt = TRUE;
 				else
-					OWLevel(MODE_NORMAL);
+					OWLevel(hw_ow,MODE_NORMAL);
 
 				return rt;
 			}
-			else DEBUG(F("response error"));
+			else ESP_LOGD(TAG, "response error");
 		}
-		else DEBUG(F("Read error"));
+		else ESP_LOGD(TAG, "Read error");
 	}
 
 	// if lost communication with DS2480B then reset
 	if (rt != TRUE)
 	{
-		WARNING(F("OWReadBitPower - lost communication with DS2480B then reset"));
+		ESP_LOGW(TAG, "OWReadBitPower - lost communication with DS2480B then reset");
 		hw_ow_probe(hw_ow);
 	}
 
@@ -1296,17 +1304,15 @@ static int bitacc(int op, int state, int loc, unsigned char *buf)
 }
 
 
-
 //--------------------------------------------------------------------------
 // Calculate the CRC8 of the byte value provided with the current
 // global 'crc8' value.
 // Returns current global crc8 value
 //
-static unsigned char docrc8(unsigned char value)
+static void ow_crc(hw_ow_t * hw_ow, unsigned char value)
 {
-	// See Application Note 27
-	// TEST BUILD
-	static unsigned char dscrc_table[] = {
+	/* See https://www.maximintegrated.com/en/design/technical-documents/app-notes/2/27.html */
+	static const unsigned char dscrc_table[] = {
 			0, 94,188,226, 97, 63,221,131,194,156,126, 32,163,253, 31, 65,
 			157,195, 33,127,252,162, 64, 30, 95,  1,227,189, 62, 96,130,220,
 			35,125,159,193, 66, 28,254,160,225,191, 93,  3,128,222, 60, 98,
@@ -1324,9 +1330,6 @@ static unsigned char docrc8(unsigned char value)
 			233,183, 85, 11,136,214, 52,106, 43,117,151,201, 74, 20,246,168,
 			116, 42,200,150, 21, 75,169,247,182,232, 10, 84,215,137,107, 53};
 
-
-	// TEST BUILD
-	crc8 = dscrc_table[crc8 ^ value];
-	return crc8;
+	hw_ow->crc8 = dscrc_table[hw_ow->crc8 ^ value];
 }
 

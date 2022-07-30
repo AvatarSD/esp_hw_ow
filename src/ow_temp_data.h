@@ -10,19 +10,11 @@
 
 #include "ow_rom.h"
 
-// class DallasSensorData
-// {
-// public:
-// 	DallasSensorData();
-// 	DallasSensorData(ROM rom, float temp);
-// 	void* operator()(const ROM &rom, const float &temp);
-// 	const ROM& getROM();
-// 	const double& getTemp();
-// 	const char * getTempStr();
-// private:
+const char *ow_temp_data_get_temp_str(double *_temp);
+
 struct ow_temp_data_t {
-	rom_t _rom;
-	double _temp;
+    struct rom_t _rom;
+    double _temp;
 };
 
 #endif /* DALLASONEWIRE_DALLASSENSORDATA_H_ */

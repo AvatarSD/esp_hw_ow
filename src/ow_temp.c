@@ -5,23 +5,17 @@
  *      Author: sd
  */
 
-#include "DallasTemp.h"
-#include "util/delay.h"
+#include "ow_temp.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
-#include "../LOG/debug.h"
+#include "esp_log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-void * operator new(size_t size)
-{
-	return malloc(size);
-}
 
-void operator delete(void * ptr)
-{
-	free(ptr);
-}
+const char * TAG= "ow_temp";
 
 // Model IDs
 #define DS18S20MODEL 0x10
@@ -45,462 +39,42 @@ void operator delete(void * ptr)
 #define TEMP_11_BIT 0x5F // 11 bit
 #define TEMP_12_BIT 0x7F // 12 bit
 
-// ow_temp_DallasTemp(DallasOneWire& iface) :
-// 		_iface(iface)
-// {
-
-// }
-/*
-const std::list<DallasSensorData>& DallasTemp::readAllTempSerial(bool isCurr)
-{
-	INFO(F("Reading sensors with serial conversion..."));
-	if (isCurr)
-		DEBUG(F("Reading with a pause for each sensor"));
-
-	//TODO repeat reading if have any error
-
-	if (_iface.OWReset() == FALSE)
-	{
-		WARNING(F("1-Wire bus reset error"));
-		return _sensorsRes;
-	}
-
-	_sensorsRes.clear();
-
-	unsigned char sendpacket[10];
-	int sendlen = 0;
-
-	while (_iface.OWNext())
-	{
-		// verify correct type
-		if ((_iface.ROM_NO.isMathFamily(0x28))
-				|| (_iface.ROM_NO.isMathFamily(0x22))
-				|| (_iface.ROM_NO.isMathFamily(0x10)))
-		{
-			_iface.OWWriteBytePower(0x44); //)
-
-			if (isCurr)
-			{
-				// sleep for 1 second
-				_delay_ms(1000);
-				if (_iface.OWReadByte() != 0xFF)
-					WARNING(
-							F("ERROR, temperature conversion was not complete\n\r"));
-			}
-
-			// select the device
-			sendpacket[0] = 0x55; // match command
-			for (int i = 0; i < 8; i++)
-				sendpacket[i + 1] = _iface.ROM_NO[i];
-
-			// Reset 1-Wire
-			if (_iface.OWReset())
-			{
-				// MATCH ROM sequence
-				_iface.OWBlock(sendpacket, 9);
-
-				// Read Scratch pad
-				sendlen = 0;
-				sendpacket[sendlen++] = 0xBE;
-				for (int i = 0; i < 9; i++)
-					sendpacket[sendlen++] = 0xFF;
-
-				if (_iface.OWBlock(sendpacket, sendlen))
-				{
-					double temp = ((double) ((int) (sendpacket[2] << 8)
-							| (sendpacket[1]))) / 0xf;
-					_sensorsRes.push_back(
-							DallasSensorData(_iface.ROM_NO, temp));
-
-#ifdef LEVEL_INFO
-					char buff[40];
-					strcpy(buff, _iface.ROM_NO.toString());
-					sprintf(buff + 16, "  Temperature is: %3.1f`C", temp);
-					INFO(buff);
-#endif
-				}
-			}
-		}
-		else
-		{
-			WARNING(F("Found else devise"));
-			WARNING(_iface.ROM_NO.toString());
-		}
-	}
-
-#ifdef LEVEL_INFO
-	char buf[20];
-	sprintf(buf, "%d sensors readed", _sensorsRes.size());
-	INFO(buf);
-#endif
-
-	return _sensorsRes;
-
-}
-
-*/
-/*
- const std::list<DallasSensorData>&  DallasTemp::readAllTempParalel(char attemptNum)
- {
- //TODO do several attempt reading times
-
- * 3 попытки поиска(+намАттемп) + старт конверсии, если в какойто меньше датчиков чем в остальных - в лог
- * попытка считывания(+намАттемп) - если датчиков меньше - до 3 попыток(+намАттемп) повторного считывания
- * +в лог варнинги.
- * +критикал если датчиков ноль
- *
-
- INFO(F("Reading sensors with parallel conversion..."));
- while(_iface.OWReset() == FALSE);
- justStartConversion();
- return justGetTemp();
-
- }
- */
-/*
- int DallasTemp::justStartConversion()
- {
- int numtemp=0;
-
- while (_iface.OWNext())
- {
- // verify correct type
- if ((_iface.ROM_NO.isMathFamily(0x28))||
- (_iface.ROM_NO.isMathFamily(0x22))||
- (_iface.ROM_NO.isMathFamily(0x10)))
- {
- _iface.OWWriteBytePower(0x44);
- numtemp++;
- }
- else
- {
- WARNING("Found else devise");
- WARNING(_iface.ROM_NO.toString());
- }
- }
-
- #ifdef LEVEL_INFO
- char buf[20];
- sprintf(buf, "%d sensors send packets to start conversions", _sensorsRes.size());
- INFO(buf);
- #endif
-
- return numtemp;
- }*/
-/*
- const std::list<DallasSensorData>& DallasTemp::justGetTemp()
- {
- unsigned char sendpacket[10];
- int sendlen=0;
-
- while (_iface.OWNext())
- {
- // verify correct type
- if ((_iface.ROM_NO.isMathFamily(0x28))||
- (_iface.ROM_NO.isMathFamily(0x22))||
- (_iface.ROM_NO.isMathFamily(0x10)))
- {
- // verify complete
- //			if (_iface.OWReadByte() != 0xFF)
- //			{
- //				WARNING("ERROR, temperature conversion was not complete at:");
- //				WARNING(_iface.ROM_NO.toString());
- //			}
-
- // select the device
- sendpacket[0] = 0x55; // match command
- for (int i = 0; i < 8; i++)
- sendpacket[i+1] = _iface.ROM_NO[i];
-
- // Reset 1-Wire
- if (_iface.OWReset())
- {
- // MATCH ROM sequence
- _iface.OWBlock(sendpacket,9);
-
-
-
- // Read Scratch pad
- sendlen = 0;
- sendpacket[sendlen++] = 0xBE;
- for (int i = 0; i < 9; i++)
- sendpacket[sendlen++] = 0xFF;
-
- if (_iface.OWBlock(sendpacket,sendlen))
- {
- double temp = ((double)((int)(sendpacket[2]<<8)|(sendpacket[1])))/0xf;
- _sensorsRes.push_back(DallasSensorData(_iface.ROM_NO, temp));
-
- #ifdef LEVEL_INFO
- char buff[40];
- strcpy(buff, _iface.ROM_NO.toString());
- sprintf(buff+16, "  Temperature is: %3.1f`C", temp);
- INFO(buff);
- #endif
- }
- }
- }
- else
- {
- WARNING(F("Found else devise"));
- WARNING(_iface.ROM_NO.toString());
- }
- }
-
- #ifdef LEVEL_INFO
- char buf[20];
- sprintf(buf, "%d sensors readed", _sensorsRes.size());
- INFO(buf);
- #endif
-
- return _sensorsRes;
- }
- */
-
-bool ow_temp_read_once(DallasSensorData & data)
-{
-	unsigned char sendpacket[10];
-	int sendlen = 0;
-	bool retVal = true;
-
-	do
-	{
-		if (_iface.OWNext())
-		{
-			// verify correct type
-			if ((_iface.ROM_NO.isMathFamily(0x28))
-					|| (_iface.ROM_NO.isMathFamily(0x22))
-					|| (_iface.ROM_NO.isMathFamily(0x10)))
-			{
-				_iface.OWWriteBytePower(0x44); //)
-
-				// sleep for 1 second
-				_delay_ms(1000);
-				if (_iface.OWReadByte() != 0xFF)
-					WARNING(
-							F(
-									"ERROR, temperature conversion was not complete\n\r"));
-
-				// select the device
-				sendpacket[0] = 0x55; // match command
-				for (int i = 0; i < 8; i++)
-					sendpacket[i + 1] = _iface.ROM_NO[i];
-
-				// Reset 1-Wire
-				if (_iface.OWReset())
-				{
-					// MATCH ROM sequence
-					_iface.OWBlock(sendpacket, 9);
-
-					// Read Scratch pad
-					sendlen = 0;
-					sendpacket[sendlen++] = 0xBE;
-					for (int i = 0; i < 9; i++)
-						sendpacket[sendlen++] = 0xFF;
-
-					if (_iface.OWBlock(sendpacket, sendlen))
-					{
-						double temp = calculateTemperature(_iface.ROM_NO,
-								sendpacket + 1);
-						data(_iface.ROM_NO, temp);
-
-#ifdef LEVEL_INFO
-						char buff[40];
-						strcpy(buff, _iface.ROM_NO.toString());
-						sprintf(buff + 16, "  Temp: %3.1f`C", temp);
-						INFO(buff);
-#endif
-						return true;
-					}
-				}
-			}
-			else
-			{
-				WARNING(F("Found else devise"));
-				WARNING(_iface.ROM_NO.toString());
-			}
-		}
-		else
-			retVal = false;
-	} while (retVal);
-	return false;
-}
-
-void ow_temp_reading_init()
-{
-	while (_iface.OWReset() == FALSE)
-		;
-
-	//_sensorsRes.clear();
-}
-
-/*const std::list<ROM>& DallasTemp::searchAllTempSensors()
-{
-	INFO(F("Searching sensors..."));
-
-	//TODO ...
-	_sensors.clear();
-
-	DATA(F("clear _sensors"));
-
-	if (_iface.OWReset() == FALSE)
-	{
-		WARNING(F("1-Wire bus reset error"));
-		return _sensors;
-	}
-
-	while (_iface.OWNext())
-	{
-		// verify correct type
-		if ((_iface.ROM_NO.isMathFamily(0x28))
-				|| (_iface.ROM_NO.isMathFamily(0x22))
-				|| (_iface.ROM_NO.isMathFamily(0x10)))
-		{
-			DEBUG(_iface.ROM_NO.toString());
-			_sensors.push_back(_iface.ROM_NO);
-		}
-		else
-		{
-			WARNING(F("Found else devise"));
-			WARNING(_iface.ROM_NO.toString());
-		}
-	}
-
-#ifdef LEVEL_INFO
-	char buf[20];
-	sprintf(buf, "%d sensors founded", _sensors.size());
-	INFO(buf);
-#endif
-
-	return _sensors;
-
-}*/
-
-bool ow_temp_read_sensor(const ROM& sensorRom, double& retTemp)
-{
-	unsigned char sendpacket[10];
-	int sendlen = 0;
-
-#ifdef LEVEL_INFO
-	char charbuf[40];
-	sprintf(charbuf, "Try to read: %s", sensorRom.toString());
-	INFO(charbuf);
-#endif
-
-	// verify correct type
-	if ((sensorRom.isMathFamily(0x28)) || (sensorRom.isMathFamily(0x22))
-			|| (sensorRom.isMathFamily(0x10)))
-	{
-
-		// match sequence for select the device
-		sendpacket[0] = 0x55; // match command
-		for (int i = 0; i < 8; i++)
-			sendpacket[i + 1] = sensorRom[i];
-
-		// Reset 1-Wire
-		if (_iface.OWReset())
-			if (_iface.OWBlock(sendpacket, 9) == 0)
-			{
-				WARNING(F("Device not available"));
-				return false;
-			}
-
-		//start conversion
-		_iface.OWWriteBytePower(0x44); //)
-
-		// sleep for 1 second
-		_delay_ms(1000);
-
-		if (_iface.OWReadByte() != 0xFF)
-		{
-			WARNING(F("ERROR, temperature conversion was not complete\n\r"));
-			return false;
-		}
-
-		// match sequence for select the device
-		sendpacket[0] = 0x55; // match command
-		for (int i = 0; i < 8; i++)
-			sendpacket[i + 1] = sensorRom[i];
-
-		// Reset 1-Wire
-		if (_iface.OWReset())
-		{
-			// select device
-			_iface.OWBlock(sendpacket, 9);
-
-			// Read Scratch pad
-			sendlen = 0;
-			sendpacket[sendlen++] = 0xBE;
-			for (int i = 0; i < 9; i++)
-				sendpacket[sendlen++] = 0xFF;
-
-			if (_iface.OWBlock(sendpacket, sendlen))
-			{
-				retTemp = calculateTemperature(sensorRom, sendpacket + 1);
-
-				if (retTemp == -127)
-				{
-					WARNING(F("Device reading error: answer 0xFF"));
-					return false;
-				}
-
-#ifdef LEVEL_INFO
-				char buff[20];
-				sprintf(buff, "Temp is: %3.1f`C", retTemp);
-				INFO(buff);
-#endif
-				return true;
-			}
-			else
-			{
-				WARNING(F("Device not available to read"));
-				return false;
-			}
-		}
-		WARNING(F("Some error while reading sensor"));
-	}
-	else
-		WARNING(F("This is not temp sensor"));
-	return false;
-}
-
-// reads scratchpad and returns the temperature in degrees C
-float ow_temp_calculate_temperature(const ROM & deviceAddress,
-		unsigned char * scratchPad)
+static	// reads scratchpad and returns the temperature in degrees C
+	float temp_calculate_temp(const struct rom_t* deviceAddress, unsigned char * scratchPad)
 {
 	int16_t rawTemperature = (((int16_t) scratchPad[TEMP_MSB]) << 8)
 			| scratchPad[TEMP_LSB];
-	DATA(F("Calculating Temperature.."));
-	switch (deviceAddress[0])
+	ESP_LOGV(TAG, "Calculating Temperature..");
+	switch (deviceAddress->no[0])
 	{
 	case DS18B20MODEL:
 	case DS1822MODEL:
-		if (deviceAddress[0] == DS18B20MODEL)
-			DEBUG(F("DS18B20 MODEL"));
+		if (deviceAddress->no[0] == DS18B20MODEL)
+			ESP_LOGD(TAG, "DS18B20 MODEL");
 		else
-			DEBUG(F("DS1822 MODEL"));
+			ESP_LOGD(TAG, "DS1822 MODEL");
 		switch (scratchPad[CONFIGURATION])
 		{
 		case TEMP_12_BIT:
-			DEBUG(F("TEMP_12_BIT"));
+			ESP_LOGD(TAG, "TEMP_12_BIT");
 			return (float) rawTemperature * 0.0625;
 			break;
 		case TEMP_11_BIT:
-			DEBUG(F("TEMP_11_BIT"));
+			ESP_LOGD(TAG, "TEMP_11_BIT");
 			return (float) (rawTemperature >> 1) * 0.125;
 			break;
 		case TEMP_10_BIT:
-			DEBUG(F("TEMP_10_BIT"));
+			ESP_LOGD(TAG, "TEMP_10_BIT");
 			return (float) (rawTemperature >> 2) * 0.25;
 			break;
 		case TEMP_9_BIT:
-			DEBUG(F("TEMP_9_BIT"));
+			ESP_LOGD(TAG, "TEMP_9_BIT");
 			return (float) (rawTemperature >> 3) * 0.5;
 			break;
 		}
 		break;
 	case DS18S20MODEL:
-		DEBUG(F("DS18S20 MODEL"));
+		ESP_LOGD(TAG, "DS18S20 MODEL");
 		/*
 		 Resolutions greater than 9 bits can be calculated using the data from
 		 the temperature, COUNT REMAIN and COUNT PER �C registers in the
@@ -524,41 +98,234 @@ float ow_temp_calculate_temperature(const ROM & deviceAddress,
 	return -127;
 }
 
-uint16_t ow_temp_search_all_temp_sensors(ROM* _mainbuf, uint16_t size)
+
+bool ow_temp_reading_init(hw_ow_t *hw_ow)
 {
+	if(!hw_ow) {
+		ESP_LOGE(TAG,"%s:%u hw_ow is NILL",__FILE__,__LINE__);
+		return false;
+	}
+	if (OWReset(hw_ow) == FALSE){
+
+		ESP_LOGW(TAG,"%s:%u OWReset fail!",__FILE__,__LINE__);
+		return false;
+	}
+		return true;
+		
+}
+
+bool ow_temp_read_once(hw_ow_t *hw_ow,struct ow_temp_data_t* data)
+{
+	if(!hw_ow) {
+		ESP_LOGE(TAG,"%s:%u hw_ow is NILL",__FILE__,__LINE__);
+		return false;
+	}
+	if(!data) {
+		ESP_LOGE(TAG,"%s:%u ow_temp_data_t is NILL",__FILE__,__LINE__);
+		return false;
+	}
+
+	unsigned char sendpacket[10];
+	int sendlen = 0;
+	bool retVal = true;
+
+	do
+	{
+		if (OWNext(hw_ow))
+		{
+			// verify correct type
+			if ((rom_is_match_family(&hw_ow->rom,  0x28))
+					|| (rom_is_match_family(&hw_ow->rom,  0x22))
+					|| (rom_is_match_family(&hw_ow->rom,  0x10)))
+			{
+				OWWriteBytePower(hw_ow,  0x44); //)
+
+				// sleep for 1 second
+				vTaskDelay( 1000/ portTICK_PERIOD_MS );
+				if (OWReadByte(hw_ow) != 0xFF)
+					ESP_LOGE(TAG,"Temperature conversion was not complete");
+
+				// select the device
+				sendpacket[0] = 0x55; // match command
+				for (int i = 0; i < 8; i++)
+					sendpacket[i + 1] = hw_ow->rom.no[i];
+
+				// Reset 1-Wire
+				if (OWReset(hw_ow))
+				{
+					// MATCH ROM sequence
+					OWBlock(hw_ow,  sendpacket, 9);
+
+					// Read Scratch pad
+					sendlen = 0;
+					sendpacket[sendlen++] = 0xBE;
+					for (int i = 0; i < 9; i++)
+						sendpacket[sendlen++] = 0xFF;
+
+					if (OWBlock(hw_ow,  sendpacket, sendlen))
+					{
+						double temp = temp_calculate_temp(&hw_ow->rom,
+								sendpacket + 1);
+						data->_rom.raw= hw_ow->rom.raw;
+						data->_temp = temp;
+
+						ESP_LOGI(TAG, "%s temp: %3.1f`C",rom_to_string(&hw_ow->rom), temp);
+						return true;
+					}
+				}
+			}
+			else
+			{
+				ESP_LOGW(TAG, "Found else devise: %s",rom_to_string(&hw_ow->rom));
+			}
+		}
+		else
+			retVal = false;
+	} while (retVal);
+	return false;
+}
+
+bool ow_temp_read_sensor(hw_ow_t *hw_ow,const struct rom_t* sensorRom, float* retTemp)
+{
+		if(!hw_ow) {
+		ESP_LOGE(TAG,"%s:%u hw_ow is NILL",__FILE__,__LINE__);
+		return false;
+	}
+		if(!sensorRom) {
+		ESP_LOGE(TAG,"%s:%u sensorRom is NILL",__FILE__,__LINE__);
+		return false;
+	}
+		if(!retTemp) {
+		ESP_LOGE(TAG,"%s:%u retTemp is NILL",__FILE__,__LINE__);
+		return false;
+	}
+
+	unsigned char sendpacket[10];
+	int sendlen = 0;
+
+	ESP_LOGD(TAG, "Try to read: %s", rom_to_string(sensorRom));
+
+	// verify correct type
+	if ((rom_is_match_family(sensorRom,0x28)) || (rom_is_match_family(sensorRom,0x22))
+			|| (rom_is_match_family(sensorRom,0x10)))
+	{
+
+		// match sequence for select the device
+		sendpacket[0] = 0x55; // match command
+		for (int i = 0; i < 8; i++)
+			sendpacket[i + 1] = sensorRom->no[i];
+
+		// Reset 1-Wire
+		if (OWReset(hw_ow))
+			if (OWBlock(hw_ow,  sendpacket, 9) == 0)
+			{
+				ESP_LOGW(TAG, "Device not available");
+				return false;
+			}
+
+		//start conversion
+		OWWriteBytePower(hw_ow,  0x44); //)
+
+		// sleep for 1 second
+		vTaskDelay( 1000/ portTICK_PERIOD_MS );
+
+		if (OWReadByte(hw_ow) != 0xFF)
+		{
+			ESP_LOGE(TAG, "Temperature conversion was not complete\n\r");
+			return false;
+		}
+
+		// match sequence for select the device
+		sendpacket[0] = 0x55; // match command
+		for (int i = 0; i < 8; i++)
+			sendpacket[i + 1] = sensorRom->no[i];
+
+		// Reset 1-Wire
+		if (OWReset(hw_ow))
+		{
+			// select device
+			OWBlock(hw_ow,  sendpacket, 9);
+
+			// Read Scratch pad
+			sendlen = 0;
+			sendpacket[sendlen++] = 0xBE;
+			for (int i = 0; i < 9; i++)
+				sendpacket[sendlen++] = 0xFF;
+
+			if (OWBlock(hw_ow,  sendpacket, sendlen))
+			{
+				*retTemp = temp_calculate_temp(sensorRom, sendpacket + 1);
+
+				if (*retTemp == -127)
+				{
+					ESP_LOGW(TAG, "Device reading error: answer 0xFF");
+					return false;
+				}
+
+				ESP_LOGD(TAG,"Temp is: %3.1f`C", *retTemp);
+
+				return true;
+			}
+			else
+			{
+				ESP_LOGW(TAG, "Device not available to read");
+				return false;
+			}
+		}
+		ESP_LOGW(TAG, "Some error while reading sensor");
+	}
+	else
+		ESP_LOGW(TAG, "This is not temp sensor");
+	return false;
+}
+
+uint16_t ow_temp_search_all_temp_sensors(hw_ow_t *hw_ow,struct rom_t* rom_arr, uint16_t size)
+
+{
+
+			if(!hw_ow) {
+		ESP_LOGE(TAG,"%s:%u hw_ow is NILL",__FILE__,__LINE__);
+		return false;
+	}
+			if(!rom_arr) {
+		ESP_LOGE(TAG,"%s:%u rom_arr is NILL",__FILE__,__LINE__);
+		return false;
+	}
+	
+for(int i = 0; i < size; i++) rom_zeroing(&rom_arr[i]);
+
 	uint16_t newSensorsCount = 0, sensorsCount = 0;
 
-	INFO(F("Searching sensors..."));
+	ESP_LOGI(TAG, "Searching sensors...");
 
-	if (_iface.OWReset() == FALSE)
+	if (OWReset(hw_ow) == FALSE)
 	{
-		WARNING(F("1-Wire bus reset error"));
+		ESP_LOGW(TAG, "1-Wire bus reset error");
 		return 0;
 	}
 
-	while (_iface.OWNext())
+	while (OWNext(hw_ow))
 	{
 		// verify correct type
-		if ((_iface.ROM_NO.isMathFamily(0x28))
-				|| (_iface.ROM_NO.isMathFamily(0x22))
-				|| (_iface.ROM_NO.isMathFamily(0x10)))
+		if ((rom_is_match_family(&hw_ow->rom,  0x28))
+				|| (rom_is_match_family(&hw_ow->rom,  0x22))
+				|| (rom_is_match_family(&hw_ow->rom,  0x10)))
 		{
-			DEBUG(_iface.ROM_NO.toString());
+			ESP_LOGV(TAG, "Device: %s",rom_to_string(&hw_ow->rom));
 			sensorsCount++;
 			for (uint16_t i = 0; i < size; i++)
 			{
-				if (_mainbuf[i] == _iface.ROM_NO)
+				/* skip newSensorsCount if allready exist in array */
+				if (rom_arr[i].raw == hw_ow->rom.raw)
 					break;
 
-				if (_mainbuf[i].isNull())
+				/* find last free place */
+				if (rom_is_null(&rom_arr[i]))
 				{
-					_mainbuf[i] = _iface.ROM_NO;
+					rom_arr[i].raw = hw_ow->rom.raw;
 					newSensorsCount++;
-#ifdef LEVEL_INFO
-					char buff[30];
-					sprintf(buff, "New sensor: %s", _iface.ROM_NO.toString());
-					INFO(buff);
-#endif
+
+					ESP_LOGI(TAG, "New sensor: %s", rom_to_string(&hw_ow->rom));
 					break;
 				}
 
@@ -566,16 +333,12 @@ uint16_t ow_temp_search_all_temp_sensors(ROM* _mainbuf, uint16_t size)
 		}
 		else
 		{
-			WARNING(F("Found else devise"));
-			WARNING(_iface.ROM_NO.toString());
+			ESP_LOGW(TAG, "Found else device: %s",rom_to_string(&hw_ow->rom));
 		}
 	}
 
-#ifdef LEVEL_INFO
-	char buf[20];
-	sprintf(buf, "Sensor founded: %d", sensorsCount);
-	INFO(buf);
-#endif
+	ESP_LOGI(TAG, "Sensor founded: %d, total new: %u", sensorsCount, newSensorsCount);
+
 
 	return newSensorsCount;
 }

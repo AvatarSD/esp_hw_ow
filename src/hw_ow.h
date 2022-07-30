@@ -7,8 +7,12 @@
 #ifndef DALLASONEWIRE_DALLASONEWIRE_H_
 #define DALLASONEWIRE_DALLASONEWIRE_H_
 
+// #include <stdio.h>
+// #include "freertos/FreeRTOS.h"
+// #include "freertos/task.h"
 #include "driver/uart.h"
-#include "hal/uart_types.h"
+// #include "driver/gpio.h"
+// #include "hal/uart_types.h"
 #include "ow_rom.h"
 
 // definitions
@@ -170,7 +174,7 @@
 typedef struct hw_ow_type {
     uart_port_t uart_num;
 
-    struct rom_t ROM_NO;
+    struct rom_t rom;
 
     // search state
 
@@ -186,20 +190,21 @@ typedef struct hw_ow_type {
     int USpeed;  // 1-Wire communication speed
 } hw_ow_t;
 
+/* Hardwre control functions */
 hw_ow_t* hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio);
 int hw_ow_probe(hw_ow_t* hw_ow);
 int hw_ow_change_baud(hw_ow_t* hw_ow, unsigned char newbaud);
 void hw_ow_hardware_reset(hw_ow_t* hw_ow);
 void hw_ow_delete(hw_ow_t* hw_ow);
 
-// Basic 1-Wire functions
+/* Basic 1-Wire functions */
 int OWReset(hw_ow_t* hw_ow);
-unsigned charOWTouchBit(hw_ow_t* hw_ow, unsigned char sendbit);
-unsigned charOWTouchByte(hw_ow_t* hw_ow, unsigned char sendbyte);
+unsigned char OWTouchBit(hw_ow_t* hw_ow, unsigned char sendbit);
+unsigned char OWTouchByte(hw_ow_t* hw_ow, unsigned char sendbyte);
 void OWWriteByte(hw_ow_t* hw_ow, unsigned char byte_value);
 void OWWriteBit(hw_ow_t* hw_ow, unsigned char bit_value);
-unsigned charOWReadBit(hw_ow_t* hw_ow);
-unsigned charOWReadByte(hw_ow_t* hw_ow);
+unsigned char OWReadBit(hw_ow_t* hw_ow);
+unsigned char OWReadByte(hw_ow_t* hw_ow);
 int OWBlock(hw_ow_t* hw_ow, unsigned char* tran_buf, int tran_len);
 int OWSearch(hw_ow_t* hw_ow);
 int OWFirst(hw_ow_t* hw_ow);
@@ -208,7 +213,7 @@ int OWVerify(hw_ow_t* hw_ow);
 void OWTargetSetup(hw_ow_t* hw_ow, unsigned char family_code);
 void OWFamilySkipSetup(hw_ow_t* hw_ow);
 
-// Extended 1-Wire functions
+/* Extended 1-Wire functions */
 int OWSpeed(hw_ow_t* hw_ow, int new_speed);
 int OWLevel(hw_ow_t* hw_ow, int level);
 int OWProgramPulse(hw_ow_t* hw_ow);
