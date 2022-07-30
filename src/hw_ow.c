@@ -1,23 +1,72 @@
 /*
  * DallasOneWire.cpp
- *
  *  Created on: 28 серп. 2015 р.
- *      Author: sd
+ *      Author: avatarsd
+ *
+ * hw_ow.c
+ *  Modified on: 29.07.2022
+ *      Author: avatarsd
  */
 
-#include "DallasOneWire.h"
-#include "util/delay.h"
-#include "../LOG/debug.h"
-#include "avr/io.h"
+#include "hw_ow.h"
+#include "driver/uart.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
 #include <stdio.h>
 
-#define WriteCOM(x,y) write(y,x)
-#define ReadCOM(x,y) read(y,x)
-#define BreakCOM() doBreak()
 
-DallasOneWire::DallasOneWire(volatile unsigned char & udr) :
-UART(udr, UART_BASE_SPEED, UART_TX_BUFFER, UART_RX_BUFFER)
+/* Hardware abstraction */
+static inline int hw_write(uart_num_t uart_num,size_t size, void* buff) {return uart_write_bytes(uart_num, buff, size);}
+static inline int hw_read(uart_num_t uart_num,size_t size, void* buff) {return uart_read_bytes(uart_num, buff, size);}
+
+static inline int hw_break(uart_num_t uart_num) {	return uart_write_bytes_with_break(uart_port_t uart_num, NULL, 0, 10000);}
+static inline void hw_flush(uart_num_t uart_num){  return uart_flush(uart_num);  }
+
+//--------------------------------------------------------------------------
+// Set the baud rate on the com port.
+//
+// 'new_baud'  - new baud rate defined as
+//                PARMSET_9600     0x00
+//                PARMSET_19200    0x02
+//                PARMSET_57600    0x04
+//                PARMSET_115200   0x06
+//
+static inline void hw_setbaud(uart_num_t uart_num,unsigned char new_baud)
 {
+	// change just the baud rate
+	switch (new_baud)
+	{
+	case PARMSET_115200:
+		ESP_ERROR_CHECK(uart_set_baudrate(uart_num,115200));
+		break;
+	case PARMSET_57600:
+		ESP_ERROR_CHECK(uart_set_baudrate(uart_num,57600));
+		break;
+	case PARMSET_19200:
+		ESP_ERROR_CHECK(uart_set_baudrate(uart_num,19200));
+		break;
+	case PARMSET_9600:
+	default:
+		ESP_ERROR_CHECK(uart_set_baudrate(uart_num,UART_BASE_SPEED));
+		break;
+	}
+
+}
+
+/* Misc utility functions */
+static inline  unsigned char docrc8(unsigned char value);
+static inline  int bitacc(int op, int state, int loc, unsigned char* buf);
+
+
+
+
+
+/* DS2480B API */
+
+hw_ow_t*  hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio) 
+{
+	/// @todo uart init, 1-wire prepare, allloc resourses
+
 	LastDiscrepancy = 0;
 	LastDeviceFlag = FALSE;
 	LastFamilyDiscrepancy = 0;
@@ -31,6 +80,207 @@ UART(udr, UART_BASE_SPEED, UART_TX_BUFFER, UART_RX_BUFFER)
 	crc8 = 0;
 }
 
+//---------------------------------------------------------------------------
+// Attempt to resyc and detect a DS2480B and set the FLEX parameters
+//
+// Returns:  TRUE  - DS2480B detected successfully
+//           FALSE - Could not detect DS2480B
+//
+int hw_ow_probe(void(hw_ow_t* hw_ow)
+{
+	INFO(F("DS2480B hw_ow_probeing..."));
+
+	unsigned char sendpacket[10],readbuffer[10];
+	unsigned char sendlen=0;
+
+	static char errorCount = 0;
+	static bool firstInit = true;
+
+	// reset modes
+	UMode = MODSEL_COMMAND;
+	UBaud = PARMSET_9600;
+	USpeed = SPEEDSEL_FLEX;
+
+	// set the baud rate to 9600
+	SetBaudCOM((unsigned char)UBaud);
+
+	// send a break to reset the DS2480B
+	hw_break(hw_ow->uart_num,);
+
+	// delay to let line settle
+	_delay_ms(20);
+
+	// flush the buffers
+	hw_flush(hw_ow->uart_num);
+
+	// send the timing byte
+	sendpacket[0] = 0xC5;//0xC1;
+	if (hw_write(hw_ow->uart_num,1,sendpacket) != 1)
+	{
+		CRITICAL(F("DS2480B_hw_ow_probe: DS2480B Not Answer"));
+		return FALSE;
+	}
+
+	// delay to let line settle
+	_delay_ms(150);
+
+	// set the FLEX configuration parameters
+	// default PDSRC = 1.37Vus
+	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_SLEW | PARMSET_Slew1p37Vus; //0x17
+	// default W1LT = 10us
+	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_WRITE1LOW | PARMSET_Write10us; //0x45
+	// default DSO/WORT = 8us
+	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_SAMPLEOFFSET | PARMSET_SampOff8us; //0x5B
+
+	// construct the command to read the baud rate (to test command block)
+	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_PARMREAD | (PARMSEL_BAUDRATE >> 3); //0x0F
+
+	// also do 1 bit operation (to test 1-Wire block)
+	sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_BIT | UBaud | BITPOL_ONE; //0x91
+
+	// flush the buffers
+	hw_flush(hw_ow->uart_num);
+
+	// send the packet
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
+	{
+		// read back the response
+		int readLen = hw_read(hw_ow->uart_num,5,readbuffer);
+		if (readLen == 5)
+		{
+			// look at the baud rate and bit operation
+			// to see if the response makes sense
+			if (((readbuffer[3] & 0xF1) == 0x00) && //3
+					((readbuffer[3] & 0x0E) == UBaud) && //3
+					((readbuffer[4] & 0xF0) == 0x90) && //4
+					((readbuffer[4] & 0x0C) == UBaud)) //4
+			{
+				DEBUG(F("DS2480B hw_ow_probe: OK"));
+				errorCount = 0;
+				return TRUE;
+			}
+			else DEBUG(F("DS2480B hw_ow_probe: Read not math"));
+		}
+		else
+		{
+			DEBUG(F("DS2480B hw_ow_probe: Read length not math"));
+			DATA(readLen);
+		}
+	}
+
+#ifdef LEVEL_DATA
+	char buff[40];
+	sprintf(buff, "Recived msg is: %X, %X, %X, %X, %X", readbuffer[0],readbuffer[0],readbuffer[0],readbuffer[0],readbuffer[0]);
+	DATA(buff);
+#endif
+
+	if(++errorCount == DETECT_ERROR_COUNT)
+	{
+		errorCount = 0;
+		HardwareReset(( hw_ow);
+		firstInit = true;
+	}
+	if(firstInit) INFO(F("DS2480B: First initialize always without answer"));
+	else WARNING(F("DS2480B not detect or not response... :-("));
+	firstInit = false;
+	return FALSE;
+}
+
+//---------------------------------------------------------------------------
+// Change the DS2480B from the current baud rate to the new baud rate.
+//
+// 'newbaud' - the new baud rate to change to, defined as:
+//               PARMSET_9600     0x00
+//               PARMSET_19200    0x02
+//               PARMSET_57600    0x04
+//               PARMSET_115200   0x06
+//
+// Returns:  current DS2480B baud rate.
+//
+int hw_ow_change_baud(hw_ow_t* hw_ow,unsigned char newbaud)
+{
+	unsigned char rt=FALSE;
+	unsigned char readbuffer[5],sendpacket[5],sendpacket2[5];
+	unsigned char sendlen=0,sendlen2=0;
+
+	// see if diffenent then current baud rate
+	if (UBaud == newbaud)
+		return UBaud;
+	else
+	{
+		// build the command packet
+		// check for correct mode
+		if (UMode != MODSEL_COMMAND)
+		{
+			UMode = MODSEL_COMMAND;
+			sendpacket[sendlen++] = MODE_COMMAND;
+		}
+		// build the command
+		sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_BAUDRATE | newbaud;
+
+		// flush the buffers
+		hw_flush(hw_ow->uart_num);
+
+		// send the packet
+		if (!hw_write(hw_ow->uart_num,sendlen,sendpacket))
+			rt = FALSE;
+		else
+		{
+			// make sure buffer is flushed
+			//_delay_ms(4);
+
+			// change our baud rate
+			SetBaudCOM(hw_ow,newbaud);
+			UBaud = newbaud;
+
+			// wait for things to settle
+			//_delay_ms(5);
+
+			// build a command packet to read back baud rate
+			sendpacket2[sendlen2++] = CMD_CONFIG | PARMSEL_PARMREAD | (PARMSEL_BAUDRATE >> 3);
+
+			// flush the buffers
+			hw_flush(hw_ow->uart_num);
+
+			// send the packet
+			if (hw_write(hw_ow->uart_num,sendlen2,sendpacket2))
+			{
+				//_delay_ms(5);
+				// read back the 1 byte response
+				if (hw_read(hw_ow->uart_num,1,readbuffer) == 1)
+				{
+					// verify correct baud
+					if (((readbuffer[0] & 0x0E) == (sendpacket[sendlen-1] & 0x0E)))
+						rt = TRUE;
+
+					else DEBUG(F("response error"));
+				}
+				else DEBUG(F("Read error"));
+			}
+		}
+	}
+
+	// if lost communication with DS2480B then reset
+	if (rt != TRUE)
+		hw_ow_probe(hw_ow);
+
+	return UBaud;
+}
+
+void hw_ow_hardware_reset(hw_ow_t* hw_ow)
+{
+	CRITICAL(F("DS2480B HardwareReset, because it not answered several times"));
+/** @todo turn hw_en disable */
+	// DALL_PWR_DDR |= (1<<DALL_PWR_PIN);
+	// DALL_PWR_PORT &= ~(1<<DALL_PWR_PIN);
+	// _delay_ms(1000);
+	// DALL_PWR_DDR &= ~(1<<DALL_PWR_PIN);
+	// _delay_ms(30);
+}
+
+void hw_ow_delete(hw_ow_t* hw_ow){
+	
+}
 
 //---------------------------------------------------------------------------
 //-------- Basic 1-Wire functions
@@ -48,7 +298,7 @@ UART(udr, UART_BASE_SPEED, UART_TX_BUFFER, UART_RX_BUFFER)
 //          Rev 1,2, and 3 of the DS2480/DS2480B.
 //
 //
-int DallasOneWire::OWReset(void)
+int OWReset(hw_ow_t* hw_ow,void)
 {
 	DATA(F("OWReset"));
 	unsigned char readbuffer[10],sendpacket[10];
@@ -68,16 +318,16 @@ int DallasOneWire::OWReset(void)
 	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_RESET | USpeed);
 
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the 1 byte response
-		if (ReadCOM(1,readbuffer) == 1)
+		if (hw_read(hw_ow->uart_num,1,readbuffer) == 1)
 		{
 			//_delay_ms(5); // delay 5 ms to give DS1994 enough time
-			flush();
+			hw_flush(hw_ow->uart_num);
 			//return TRUE;
 
 
@@ -91,7 +341,7 @@ int DallasOneWire::OWReset(void)
 
 	WARNING(F("An error occurred so re-sync with DS2480B"));
 	// an error occurred so re-sync with DS2480B
-	DS2480B_Detect();
+	hw_ow_probe(hw_ow);
 
 	return FALSE;
 }
@@ -102,7 +352,7 @@ int DallasOneWire::OWReset(void)
 //
 // 'sendbit' - 1 bit to send (least significant byte)
 //
-void DallasOneWire::OWWriteBit(unsigned char sendbit)
+void OWWriteBit(hw_ow_t* hw_ow,unsigned char sendbit)
 {
 	OWTouchBit(sendbit);
 }
@@ -113,7 +363,7 @@ void DallasOneWire::OWWriteBit(unsigned char sendbit)
 //
 // Returns:  8 bits read from 1-Wire Net
 //
-unsigned char DallasOneWire::OWReadBit(void)
+unsigned char OWReadBit(hw_ow_t* hw_ow,void)
 {
 	return OWTouchBit(0x01);
 }
@@ -129,7 +379,7 @@ unsigned char DallasOneWire::OWReadBit(void)
 // Returns: 0:   0 bit read from sendbit
 //          1:   1 bit read from sendbit
 //
-unsigned char DallasOneWire::OWTouchBit(unsigned char sendbit)
+unsigned char OWTouchBit(hw_ow_t* hw_ow,unsigned char sendbit)
 {
 	DATA("OWTouchBit");
 	unsigned char readbuffer[10],sendpacket[10];
@@ -150,13 +400,13 @@ unsigned char DallasOneWire::OWTouchBit(unsigned char sendbit)
 	sendpacket[sendlen++] |= CMD_COMM | FUNCTSEL_BIT | USpeed;
 
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the response
-		if (ReadCOM(1,readbuffer) == 1)
+		if (hw_read(hw_ow->uart_num,1,readbuffer) == 1)
 		{
 			// interpret the response
 			if (((readbuffer[0] & 0xE0) == 0x80) &&
@@ -170,7 +420,7 @@ unsigned char DallasOneWire::OWTouchBit(unsigned char sendbit)
 
 	WARNING(F("OWTouchBit: An error occured so re-sync with DS2480B"));
 	// an error occured so re-sync with DS2480B
-	DS2480B_Detect();
+	hw_ow_probe(hw_ow);
 
 	return 0;
 }
@@ -185,7 +435,7 @@ unsigned char DallasOneWire::OWTouchBit(unsigned char sendbit)
 // Returns:  TRUE: bytes written and echo was the same
 //           FALSE: echo was not the same
 //
-void DallasOneWire::OWWriteByte(unsigned char sendbyte)
+void OWWriteByte(hw_ow_t* hw_ow,unsigned char sendbyte)
 {
 	OWTouchByte(sendbyte);
 }
@@ -196,7 +446,7 @@ void DallasOneWire::OWWriteByte(unsigned char sendbyte)
 //
 // Returns:  8 bits read from 1-Wire Net
 //
-unsigned char DallasOneWire::OWReadByte(void)
+unsigned char OWReadByte(hw_ow_t* hw_ow,void)
 {
 	return OWTouchByte(0xFF);
 }
@@ -211,7 +461,7 @@ unsigned char DallasOneWire::OWReadByte(void)
 //
 // Returns:  8 bits read from sendbyte
 //
-unsigned char DallasOneWire::OWTouchByte(unsigned char sendbyte)
+unsigned char OWTouchByte(hw_ow_t* hw_ow,unsigned char sendbyte)
 {
 	DATA(F("OWTouchByte"));
 	unsigned char readbuffer[10],sendpacket[10];
@@ -235,13 +485,13 @@ unsigned char DallasOneWire::OWTouchByte(unsigned char sendbyte)
 		sendpacket[sendlen++] = (unsigned char)sendbyte;
 
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the 1 byte response
-		if (ReadCOM(1,readbuffer) == 1)
+		if (hw_read(hw_ow->uart_num,1,readbuffer) == 1)
 		{
 			// return the response
 			return readbuffer[0];
@@ -251,7 +501,7 @@ unsigned char DallasOneWire::OWTouchByte(unsigned char sendbyte)
 
 	WARNING(F("OWTouchByte: An error occured so re-sync with DS2480B"));
 	// an error occured so re-sync with DS2480B
-	DS2480B_Detect();
+	hw_ow_probe(hw_ow);
 
 	return 0;
 }
@@ -270,7 +520,7 @@ unsigned char DallasOneWire::OWTouchByte(unsigned char sendbyte)
 //
 //  The maximum tran_length is (160)
 //
-int DallasOneWire::OWBlock(unsigned char *tran_buf, int tran_len)
+int OWBlock(hw_ow_t* hw_ow,unsigned char *tran_buf, int tran_len)
 {
 	DATA(F("OWBlock"));
 
@@ -300,13 +550,13 @@ int DallasOneWire::OWBlock(unsigned char *tran_buf, int tran_len)
 	}
 
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the response
-		if (ReadCOM(tran_len,tran_buf) == tran_len)
+		if (hw_read(hw_ow->uart_num,tran_len,tran_buf) == tran_len)
 		{
 			return TRUE;
 		}
@@ -315,7 +565,7 @@ int DallasOneWire::OWBlock(unsigned char *tran_buf, int tran_len)
 
 	WARNING(F("OWBlock: An error occured so re-sync with DS2480B"));
 	// an error occured so re-sync with DS2480B
-	DS2480B_Detect();
+	hw_ow_probe(hw_ow);
 
 	return FALSE;
 }
@@ -325,7 +575,7 @@ int DallasOneWire::OWBlock(unsigned char *tran_buf, int tran_len)
 // Return TRUE  : device found, ROM number in ROM_NO buffer
 //        FALSE : no device present
 //
-int DallasOneWire::OWFirst()
+int OWFirst(hw_ow_t* hw_ow,)
 {
 	DATA(F("OWFirst - reset the search state"));
 	// reset the search state
@@ -341,7 +591,7 @@ int DallasOneWire::OWFirst()
 // Return TRUE  : device found, ROM number in ROM_NO buffer
 //        FALSE : device not found, end of search
 //
-int DallasOneWire::OWNext()
+int OWNext(hw_ow_t* hw_ow,)
 {
 	DATA(F("OWNext - leave the search state alone"));
 	// leave the search state alone
@@ -353,7 +603,7 @@ int DallasOneWire::OWNext()
 // Return TRUE  : device verified present
 //        FALSE : device not present
 //
-int DallasOneWire::OWVerify()
+int OWVerify(hw_ow_t* hw_ow,)
 {
 	DATA(F("OWVerify"));
 	unsigned char rom_backup[8];
@@ -405,7 +655,7 @@ int DallasOneWire::OWVerify()
 // Setup the search to find the device type 'family_code' on the next call
 // to OWNext() if it is present.
 //
-void DallasOneWire::OWTargetSetup(unsigned char family_code)
+void OWTargetSetup(hw_ow_t* hw_ow,unsigned char family_code)
 {
 	DATA(F("OWTargetSetup"));
 	DATA(family_code);
@@ -423,7 +673,7 @@ void DallasOneWire::OWTargetSetup(unsigned char family_code)
 // Setup the search to skip the current device type on the next call
 // to OWNext().
 //
-void DallasOneWire::OWFamilySkipSetup()
+void OWFamilySkipSetup(hw_ow_t* hw_ow,)
 {
 	// set the Last discrepancy to last family discrepancy
 	LastDiscrepancy = LastFamilyDiscrepancy;
@@ -453,7 +703,7 @@ void DallasOneWire::OWFamilySkipSetup()
 //                       last search was the last device or there
 //                       are no devices on the 1-Wire Net.
 //
-int DallasOneWire::OWSearch(void)
+int OWSearch(hw_ow_t* hw_ow,void)
 {
 	DATA(F("OWSearch"));
 
@@ -545,13 +795,13 @@ int DallasOneWire::OWSearch(void)
 	sendpacket[sendlen++] = (unsigned char)(CMD_COMM | FUNCTSEL_SEARCHOFF | USpeed);
 
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the 1 byte response
-		if (ReadCOM(17,readbuffer) == 17)
+		if (hw_read(hw_ow->uart_num,17,readbuffer) == 17)
 		{
 			// interpret the bit stream
 			for (i = 0; i < 64; i++)
@@ -607,7 +857,7 @@ int DallasOneWire::OWSearch(void)
 
 	WARNING(F("OWSearch: an error occured so re-sync with DS2480B"));
 	// an error occured so re-sync with DS2480B
-	DS2480B_Detect();
+	hw_ow_probe(hw_ow);
 
 	// reset the search
 	LastDiscrepancy = 0;
@@ -630,7 +880,7 @@ int DallasOneWire::OWSearch(void)
 //
 // Returns:  current 1-Wire Net speed
 //
-int DallasOneWire::OWSpeed(int new_speed)
+int OWSpeed(hw_ow_t* hw_ow,int new_speed)
 {
 	DATA("OWSpeed");
 	unsigned char sendpacket[5];
@@ -646,7 +896,7 @@ int DallasOneWire::OWSpeed(int new_speed)
 		if (new_speed == MODE_OVERDRIVE)
 		{
 			// if overdrive then switch to 115200 baud
-			if (DS2480B_ChangeBaud(MAX_BAUD) == MAX_BAUD)
+			if (ChangeBaud(hw_owMAX_BAUD) == MAX_BAUD)
 			{
 				USpeed = SPEEDSEL_OD;
 				rt = TRUE;
@@ -656,7 +906,7 @@ int DallasOneWire::OWSpeed(int new_speed)
 		else if (new_speed == MODE_NORMAL)
 		{
 			// else normal so set to 9600 baud
-			if (DS2480B_ChangeBaud(PARMSET_9600) == PARMSET_9600)
+			if (ChangeBaud(hw_owPARMSET_9600) == PARMSET_9600)
 			{
 				USpeed = SPEEDSEL_FLEX;
 				rt = TRUE;
@@ -678,12 +928,12 @@ int DallasOneWire::OWSpeed(int new_speed)
 			sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_SEARCHOFF | USpeed;
 
 			// send the packet
-			if (!WriteCOM(sendlen,sendpacket))
+			if (!hw_write(hw_ow->uart_num,sendlen,sendpacket))
 			{
 				rt = FALSE;
 				WARNING(F("OWSpeed - lost communication with DS2480B then reset"));
 				// lost communication with DS2480B then reset
-				DS2480B_Detect();
+				hw_ow_probe(hw_ow);
 			}
 		}
 
@@ -703,7 +953,7 @@ int DallasOneWire::OWSpeed(int new_speed)
 //
 // Returns:  current 1-Wire Net level
 //
-int DallasOneWire::OWLevel(int new_level)
+int OWLevel(hw_ow_t* hw_ow,int new_level)
 {
 	DATA("OWLevel");
 	DATA(new_level);
@@ -739,13 +989,13 @@ int DallasOneWire::OWLevel(int new_level)
 			sendpacket[sendlen++] = MODE_STOP_PULSE;
 
 			// flush the buffers
-			flush();
+			hw_flush(hw_ow->uart_num);
 
 			// send the packet
-			if (WriteCOM(sendlen,sendpacket))
+			if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 			{
 				// read back the 1 byte response
-				if (ReadCOM(2,readbuffer) == 2)
+				if (hw_read(hw_ow->uart_num,2,readbuffer) == 2)
 				{
 					// check response byte
 					if (((readbuffer[0] & 0xE0) == 0xE0) && ((readbuffer[1] & 0xE0) == 0xE0))
@@ -768,13 +1018,13 @@ int DallasOneWire::OWLevel(int new_level)
 			sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_CHMOD | SPEEDSEL_PULSE | BITPOL_5V;
 
 			// flush the buffers
-			flush();
+			hw_flush(hw_ow->uart_num);
 
 			// send the packet
-			if (WriteCOM(sendlen,sendpacket))
+			if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 			{
 				// read back the 1 byte response from setting time limit
-				if (ReadCOM(1,readbuffer) == 1)
+				if (hw_read(hw_ow->uart_num,1,readbuffer) == 1)
 				{
 					// check response byte
 					if ((readbuffer[0] & 0x81) == 0)
@@ -791,7 +1041,7 @@ int DallasOneWire::OWLevel(int new_level)
 		if (rt != TRUE)
 		{
 			WARNING(F("OWLevel - lost communication with DS2480B then reset"));
-			DS2480B_Detect();
+			hw_ow_probe(hw_ow);
 		}
 	}
 
@@ -806,7 +1056,7 @@ int DallasOneWire::OWLevel(int new_level)
 // Returns:  TRUE  successful
 //           FALSE program voltage not available
 //
-int DallasOneWire::OWProgramPulse(void)
+int OWProgramPulse(hw_ow_t* hw_ow,void)
 {
 	DATA(F("OWProgramPulse"));
 
@@ -830,13 +1080,13 @@ int DallasOneWire::OWProgramPulse(void)
 	sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_CHMOD | BITPOL_12V | SPEEDSEL_PULSE;
 
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the 2 byte response
-		if (ReadCOM(2,readbuffer) == 2)
+		if (hw_read(hw_ow->uart_num,2,readbuffer) == 2)
 		{
 			// check response byte
 			if (((readbuffer[0] | CMD_CONFIG) ==
@@ -850,7 +1100,7 @@ int DallasOneWire::OWProgramPulse(void)
 
 	// an error occured so re-sync with DS2480B
 	WARNING(F("OWProgramPulse - lost communication with DS2480B then reset"));
-	DS2480B_Detect();
+	hw_ow_probe(hw_ow);
 
 	return FALSE;
 }
@@ -866,7 +1116,7 @@ int DallasOneWire::OWProgramPulse(void)
 // Returns:  TRUE: bytes written and echo was the same, strong pullup now on
 //           FALSE: echo was not the same
 //
-int DallasOneWire::OWWriteBytePower(int sendbyte)
+int OWWriteBytePower(hw_ow_t* hw_ow,int sendbyte)
 {
 	DATA(F("OWWriteBytePower"));
 
@@ -897,13 +1147,13 @@ int DallasOneWire::OWWriteBytePower(int sendbyte)
 	}
 
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the 9 byte response from setting time limit
-		if (ReadCOM(9,readbuffer) == 9)
+		if (hw_read(hw_ow->uart_num,9,readbuffer) == 9)
 		{
 			// check response
 			if ((readbuffer[0] & 0x81) == 0)
@@ -931,7 +1181,7 @@ int DallasOneWire::OWWriteBytePower(int sendbyte)
 	if (rt != TRUE)
 	{
 		WARNING(F("OWWriteBytePower - lost communication with DS2480B then reset"));
-		DS2480B_Detect();
+		hw_ow_probe(hw_ow);
 	}
 
 	return rt;
@@ -949,7 +1199,7 @@ int DallasOneWire::OWWriteBytePower(int sendbyte)
 // Returns:  TRUE: bit written and response correct, strong pullup now on
 //           FALSE: response incorrect
 //
-int DallasOneWire::OWReadBitPower(int applyPowerResponse)
+int OWReadBitPower(hw_ow_t* hw_ow,int applyPowerResponse)
 {
 	DATA(F("OWReadBitPower"));
 	unsigned char sendpacket[3],readbuffer[3];
@@ -971,13 +1221,13 @@ int DallasOneWire::OWReadBitPower(int applyPowerResponse)
 			| CMD_COMM | FUNCTSEL_BIT | USpeed |
 			PRIME5V_TRUE;
 	// flush the buffers
-	flush();
+	hw_flush(hw_ow->uart_num);
 
 	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
+	if (hw_write(hw_ow->uart_num,sendlen,sendpacket))
 	{
 		// read back the 2 byte response from setting time limit
-		if (ReadCOM(2,readbuffer) == 2)
+		if (hw_read(hw_ow->uart_num,2,readbuffer) == 2)
 		{
 			// check response to duration set
 			if ((readbuffer[0] & 0x81) == 0)
@@ -1002,244 +1252,12 @@ int DallasOneWire::OWReadBitPower(int applyPowerResponse)
 	if (rt != TRUE)
 	{
 		WARNING(F("OWReadBitPower - lost communication with DS2480B then reset"));
-		DS2480B_Detect();
+		hw_ow_probe(hw_ow);
 	}
 
 	return rt;
 }
 
-//---------------------------------------------------------------------------
-//-------- DS2480B functions
-//---------------------------------------------------------------------------
-
-//---------------------------------------------------------------------------
-// Attempt to resyc and detect a DS2480B and set the FLEX parameters
-//
-// Returns:  TRUE  - DS2480B detected successfully
-//           FALSE - Could not detect DS2480B
-//
-int DallasOneWire::DS2480B_Detect(void)
-{
-	INFO(F("DS2480B Detecting..."));
-
-	unsigned char sendpacket[10],readbuffer[10];
-	unsigned char sendlen=0;
-
-	static char errorCount = 0;
-	static bool firstInit = true;
-
-	// reset modes
-	UMode = MODSEL_COMMAND;
-	UBaud = PARMSET_9600;
-	USpeed = SPEEDSEL_FLEX;
-
-	// set the baud rate to 9600
-	SetBaudCOM((unsigned char)UBaud);
-
-	// send a break to reset the DS2480B
-	BreakCOM();
-
-	// delay to let line settle
-	_delay_ms(20);
-
-	// flush the buffers
-	flush();
-
-	// send the timing byte
-	sendpacket[0] = 0xC5;//0xC1;
-	if (WriteCOM(1,sendpacket) != 1)
-	{
-		CRITICAL(F("DS2480B_Detect: DS2480B Not Answer"));
-		return FALSE;
-	}
-
-	// delay to let line settle
-	_delay_ms(150);
-
-	// set the FLEX configuration parameters
-	// default PDSRC = 1.37Vus
-	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_SLEW | PARMSET_Slew1p37Vus; //0x17
-	// default W1LT = 10us
-	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_WRITE1LOW | PARMSET_Write10us; //0x45
-	// default DSO/WORT = 8us
-	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_SAMPLEOFFSET | PARMSET_SampOff8us; //0x5B
-
-	// construct the command to read the baud rate (to test command block)
-	sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_PARMREAD | (PARMSEL_BAUDRATE >> 3); //0x0F
-
-	// also do 1 bit operation (to test 1-Wire block)
-	sendpacket[sendlen++] = CMD_COMM | FUNCTSEL_BIT | UBaud | BITPOL_ONE; //0x91
-
-	// flush the buffers
-	flush();
-
-	// send the packet
-	if (WriteCOM(sendlen,sendpacket))
-	{
-		// read back the response
-		int readLen = ReadCOM(5,readbuffer);
-		if (readLen == 5)
-		{
-			// look at the baud rate and bit operation
-			// to see if the response makes sense
-			if (((readbuffer[3] & 0xF1) == 0x00) && //3
-					((readbuffer[3] & 0x0E) == UBaud) && //3
-					((readbuffer[4] & 0xF0) == 0x90) && //4
-					((readbuffer[4] & 0x0C) == UBaud)) //4
-			{
-				DEBUG(F("DS2480B Detect: OK"));
-				errorCount = 0;
-				return TRUE;
-			}
-			else DEBUG(F("DS2480B Detect: Read not math"));
-		}
-		else
-		{
-			DEBUG(F("DS2480B Detect: Read length not math"));
-			DATA(readLen);
-		}
-	}
-
-#ifdef LEVEL_DATA
-	char buff[40];
-	sprintf(buff, "Recived msg is: %X, %X, %X, %X, %X", readbuffer[0],readbuffer[0],readbuffer[0],readbuffer[0],readbuffer[0]);
-	DATA(buff);
-#endif
-
-	if(++errorCount == DETECT_ERROR_COUNT)
-	{
-		errorCount = 0;
-		DS2480B_HardwareReset();
-		firstInit = true;
-	}
-	if(firstInit) INFO(F("DS2480B: First initialize always without answer"));
-	else WARNING(F("DS2480B not detect or not response... :-("));
-	firstInit = false;
-	return FALSE;
-}
-
-//---------------------------------------------------------------------------
-// Change the DS2480B from the current baud rate to the new baud rate.
-//
-// 'newbaud' - the new baud rate to change to, defined as:
-//               PARMSET_9600     0x00
-//               PARMSET_19200    0x02
-//               PARMSET_57600    0x04
-//               PARMSET_115200   0x06
-//
-// Returns:  current DS2480B baud rate.
-//
-int DallasOneWire::DS2480B_ChangeBaud(unsigned char newbaud)
-{
-	unsigned char rt=FALSE;
-	unsigned char readbuffer[5],sendpacket[5],sendpacket2[5];
-	unsigned char sendlen=0,sendlen2=0;
-
-	// see if diffenent then current baud rate
-	if (UBaud == newbaud)
-		return UBaud;
-	else
-	{
-		// build the command packet
-		// check for correct mode
-		if (UMode != MODSEL_COMMAND)
-		{
-			UMode = MODSEL_COMMAND;
-			sendpacket[sendlen++] = MODE_COMMAND;
-		}
-		// build the command
-		sendpacket[sendlen++] = CMD_CONFIG | PARMSEL_BAUDRATE | newbaud;
-
-		// flush the buffers
-		flush();
-
-		// send the packet
-		if (!WriteCOM(sendlen,sendpacket))
-			rt = FALSE;
-		else
-		{
-			// make sure buffer is flushed
-			//_delay_ms(4);
-
-			// change our baud rate
-			SetBaudCOM(newbaud);
-			UBaud = newbaud;
-
-			// wait for things to settle
-			//_delay_ms(5);
-
-			// build a command packet to read back baud rate
-			sendpacket2[sendlen2++] = CMD_CONFIG | PARMSEL_PARMREAD | (PARMSEL_BAUDRATE >> 3);
-
-			// flush the buffers
-			flush();
-
-			// send the packet
-			if (WriteCOM(sendlen2,sendpacket2))
-			{
-				//_delay_ms(5);
-				// read back the 1 byte response
-				if (ReadCOM(1,readbuffer) == 1)
-				{
-					// verify correct baud
-					if (((readbuffer[0] & 0x0E) == (sendpacket[sendlen-1] & 0x0E)))
-						rt = TRUE;
-
-					else DEBUG(F("response error"));
-				}
-				else DEBUG(F("Read error"));
-			}
-		}
-	}
-
-	// if lost communication with DS2480B then reset
-	if (rt != TRUE)
-		DS2480B_Detect();
-
-	return UBaud;
-}
-
-void DallasOneWire::DS2480B_HardwareReset()
-{
-	CRITICAL(F("DS2480B HardwareReset, because it not answered several times"));
-
-	DALL_PWR_DDR |= (1<<DALL_PWR_PIN);
-	DALL_PWR_PORT &= ~(1<<DALL_PWR_PIN);
-	_delay_ms(1000);
-	DALL_PWR_DDR &= ~(1<<DALL_PWR_PIN);
-	_delay_ms(30);
-}
-
-//--------------------------------------------------------------------------
-// Set the baud rate on the com port.
-//
-// 'new_baud'  - new baud rate defined as
-//                PARMSET_9600     0x00
-//                PARMSET_19200    0x02
-//                PARMSET_57600    0x04
-//                PARMSET_115200   0x06
-//
-void DallasOneWire::SetBaudCOM(unsigned char new_baud)
-{
-	// change just the baud rate
-	switch (new_baud)
-	{
-	case PARMSET_115200:
-		setBaud(115200);
-		break;
-	case PARMSET_57600:
-		setBaud(57600);
-		break;
-	case PARMSET_19200:
-		setBaud(19200);
-		break;
-	case PARMSET_9600:
-	default:
-		setBaud(UART_BASE_SPEED);
-		break;
-	}
-
-}
 
 //---------------------------------------------------------------------------
 //-------- Utility functions
@@ -1257,7 +1275,7 @@ void DallasOneWire::SetBaudCOM(unsigned char new_baud)
 // Returns: 1   if operation is set (1)
 //          0/1 state of bit number 'loc' if operation is reading
 //
-int DallasOneWire::bitacc(int op, int state, int loc, unsigned char *buf)
+static int bitacc(int op, int state, int loc, unsigned char *buf)
 {
 	int nbyt,nbit;
 
@@ -1284,7 +1302,7 @@ int DallasOneWire::bitacc(int op, int state, int loc, unsigned char *buf)
 // global 'crc8' value.
 // Returns current global crc8 value
 //
-unsigned char DallasOneWire::docrc8(unsigned char value)
+static unsigned char docrc8(unsigned char value)
 {
 	// See Application Note 27
 	// TEST BUILD

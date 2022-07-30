@@ -45,11 +45,11 @@ void operator delete(void * ptr)
 #define TEMP_11_BIT 0x5F // 11 bit
 #define TEMP_12_BIT 0x7F // 12 bit
 
-DallasTemp::DallasTemp(DallasOneWire& iface) :
-		_iface(iface)
-{
+// ow_temp_DallasTemp(DallasOneWire& iface) :
+// 		_iface(iface)
+// {
 
-}
+// }
 /*
 const std::list<DallasSensorData>& DallasTemp::readAllTempSerial(bool isCurr)
 {
@@ -257,7 +257,7 @@ const std::list<DallasSensorData>& DallasTemp::readAllTempSerial(bool isCurr)
  }
  */
 
-bool DallasTemp::readOnce(DallasSensorData & data)
+bool ow_temp_read_once(DallasSensorData & data)
 {
 	unsigned char sendpacket[10];
 	int sendlen = 0;
@@ -326,7 +326,7 @@ bool DallasTemp::readOnce(DallasSensorData & data)
 	return false;
 }
 
-void DallasTemp::readingInit()
+void ow_temp_reading_init()
 {
 	while (_iface.OWReset() == FALSE)
 		;
@@ -376,7 +376,7 @@ void DallasTemp::readingInit()
 
 }*/
 
-bool DallasTemp::readSensor(const ROM& sensorRom, double& retTemp)
+bool ow_temp_read_sensor(const ROM& sensorRom, double& retTemp)
 {
 	unsigned char sendpacket[10];
 	int sendlen = 0;
@@ -465,7 +465,7 @@ bool DallasTemp::readSensor(const ROM& sensorRom, double& retTemp)
 }
 
 // reads scratchpad and returns the temperature in degrees C
-float DallasTemp::calculateTemperature(const ROM & deviceAddress,
+float ow_temp_calculate_temperature(const ROM & deviceAddress,
 		unsigned char * scratchPad)
 {
 	int16_t rawTemperature = (((int16_t) scratchPad[TEMP_MSB]) << 8)
@@ -524,7 +524,7 @@ float DallasTemp::calculateTemperature(const ROM & deviceAddress,
 	return -127;
 }
 
-uint16_t DallasTemp::searchAllTempSensors(ROM* _mainbuf, uint16_t size)
+uint16_t ow_temp_search_all_temp_sensors(ROM* _mainbuf, uint16_t size)
 {
 	uint16_t newSensorsCount = 0, sensorsCount = 0;
 
