@@ -121,6 +121,8 @@ hw_ow_t* hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio) 
     hw_ow->LastFamilyDiscrepancy = 0;
     hw_ow->crc8 = 0;
 
+    ESP_LOGI(TAG, "New hw_ow has been initialized: %p", hw_ow);
+
     return hw_ow;
 }
 
@@ -146,6 +148,8 @@ void hw_ow_delete(hw_ow_t* hw_ow) {
     }
     uart_driver_delete(hw_ow->uart_num);
     free(hw_ow);
+
+    ESP_LOGI(TAG, "An hw_ow has been deleted: %p", hw_ow);
 }
 
 //---------------------------------------------------------------------------
