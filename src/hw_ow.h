@@ -7,12 +7,7 @@
 #ifndef DALLASONEWIRE_DALLASONEWIRE_H_
 #define DALLASONEWIRE_DALLASONEWIRE_H_
 
-// #include <stdio.h>
-// #include "freertos/FreeRTOS.h"
-// #include "freertos/task.h"
 #include "driver/uart.h"
-// #include "driver/gpio.h"
-// #include "hal/uart_types.h"
 #include "ow_rom.h"
 
 // definitions

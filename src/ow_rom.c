@@ -26,7 +26,7 @@ const char *rom_to_string(const struct rom_t *rom) {
     return buf;
 }
 
-bool rom_is_equal(const struct rom_t *rom,const struct rom_t *cmp) {
+bool rom_is_equal(const struct rom_t *rom, const struct rom_t *cmp) {
     for (unsigned char i = 0; i < ROM_CELLS_COUNT(rom); i++)
         if (rom->no[i] != cmp->no[i]) return false;
     return true;
@@ -45,8 +45,6 @@ void rom_zeroing(struct rom_t *rom) {
 bool rom_from_string(struct rom_t *rom, const char *str) {
     sscanf(str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", rom->no[0], rom->no[1], rom->no[2],
            rom->no[3], rom->no[4], rom->no[5], rom->no[6], rom->no[7]);
-
-    //	sscanf(str, "%llx", (unsigned long long *)rom);
 
     return true;
 }
