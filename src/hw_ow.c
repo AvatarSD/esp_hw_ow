@@ -88,7 +88,7 @@ hw_ow_t* hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio) 
     ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(uart_num, tx_gpio, rx_gpio, -1, -1));
     ESP_ERROR_CHECK(uart_driver_install(uart_num, BUF_SIZE * 2, 0, 0, NULL, intr_alloc_flags));
- 
+
     ESP_LOGI(TAG, "Driver for: UART%i registered ", uart_num);
 
     if (en_gpio >= 0) {
@@ -131,7 +131,7 @@ hw_ow_t* hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio) 
 
 void hw_ow_delete(hw_ow_t* hw_ow) {
     if (!hw_ow) {
-        ESP_LOGE(TAG, "%s:%u hw_ow is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u hw_ow is NULL", __FILE__, __LINE__);
         return;
     }
     if (hw_ow->en_pin >= 0) {
@@ -226,22 +226,18 @@ int hw_ow_probe(hw_ow_t* hw_ow) {
                 ((readbuffer[4] & 0xF0) == 0x90) &&          // 4
                 ((readbuffer[4] & 0x0C) == hw_ow->UBaud))    // 4
             {
-                ESP_LOGD(TAG, "DS2480B hw_ow_probe: OK");
+                ESP_LOGI(TAG, "DS2480B hw_ow_probe: OK");
                 errorCount = 0;
                 return TRUE;
             } else
-                ESP_LOGD(TAG, "DS2480B hw_ow_probe: Read not math");
+                ESP_LOGW(TAG, "DS2480B hw_ow_probe: Read not math");
         } else {
-            ESP_LOGD(TAG, "DS2480B hw_ow_probe: Read length(%i) not math", readLen);
+            ESP_LOGW(TAG, "DS2480B hw_ow_probe: Read length(%i) not math", readLen);
         }
     }
 
-#ifdef LEVEL_DATA
-    char buff[40];
-    sprintf(buff, "Recived msg is: %X, %X, %X, %X, %X", readbuffer[0], readbuffer[0], readbuffer[0],
-            readbuffer[0], readbuffer[0]);
-    ESP_LOGV(TAG, buff);
-#endif
+    ESP_LOGD(TAG, "Recived msg is: %X, %X, %X, %X, %X", readbuffer[0], readbuffer[1], readbuffer[2],
+             readbuffer[3], readbuffer[4]);
 
     if (++errorCount == DS2480_DETECT_ERROR_COUNT) {
         errorCount = 0;
@@ -251,7 +247,7 @@ int hw_ow_probe(hw_ow_t* hw_ow) {
     if (firstInit)
         ESP_LOGI(TAG, "DS2480B: First initialize always without answer");
     else
-        ESP_LOGW(TAG, "DS2480B not detect or not response... :-(");
+        ESP_LOGE(TAG, "DS2480B not detect or not response... :-(");
     firstInit = false;
     return FALSE;
 }
@@ -318,9 +314,9 @@ int hw_ow_change_baud(hw_ow_t* hw_ow, unsigned char newbaud) {
                         rt = TRUE;
 
                     else
-                        ESP_LOGD(TAG, "response error");
+                        ESP_LOGW(TAG, "response error");
                 } else
-                    ESP_LOGD(TAG, "Read error");
+                    ESP_LOGW(TAG, "Read error");
             }
         }
     }
@@ -333,7 +329,7 @@ int hw_ow_change_baud(hw_ow_t* hw_ow, unsigned char newbaud) {
 
 void hw_ow_hardware_reset(hw_ow_t* hw_ow) {
     if (hw_ow->en_pin < 0) return;
-    ESP_LOGE(TAG, "DS2480B HardwareReset, because it not answered several times");
+    ESP_LOGW(TAG, "DS2480B HardwareReset, because it not answered several times");
 
     gpio_set_level(hw_ow->en_pin, false);
     vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -394,7 +390,7 @@ int OWReset(hw_ow_t* hw_ow) {
                 ((readbuffer[0] & RB_RESET_MASK) == RB_ALARMPRESENCE))
                 return TRUE;
         } else
-            ESP_LOGD(TAG, "Read error");
+            ESP_LOGW(TAG, "Read error");
     }
 
     ESP_LOGW(TAG, "An error occurred so re-sync with DS2480B");
@@ -462,7 +458,7 @@ unsigned char OWTouchBit(hw_ow_t* hw_ow, unsigned char sendbit) {
             else
                 return 0;
         } else
-            ESP_LOGD(TAG, "Read error");
+            ESP_LOGW(TAG, "Read error");
     }
 
     ESP_LOGW(TAG, "OWTouchBit: An error occured so re-sync with DS2480B");
@@ -532,7 +528,7 @@ unsigned char OWTouchByte(hw_ow_t* hw_ow, unsigned char sendbyte) {
             // return the response
             return readbuffer[0];
         } else
-            ESP_LOGD(TAG, "Read error");
+            ESP_LOGW(TAG, "Read error");
     }
 
     ESP_LOGW(TAG, "OWTouchByte: An error occured so re-sync with DS2480B");
@@ -589,7 +585,7 @@ int OWBlock(hw_ow_t* hw_ow, unsigned char* tran_buf, int tran_len) {
         if (hw_read(hw_ow->uart_num, tran_len, tran_buf) == tran_len) {
             return TRUE;
         } else
-            ESP_LOGD(TAG, "Read error");
+            ESP_LOGW(TAG, "Read error");
     }
 
     ESP_LOGW(TAG, "OWBlock: An error occured so re-sync with DS2480B");
@@ -655,7 +651,7 @@ int OWVerify(hw_ow_t* hw_ow) {
             }
         }
     } else {
-        ESP_LOGD(TAG, "Search error when verify");
+        ESP_LOGW(TAG, "Search error when verify");
         rslt = FALSE;
     }
 
@@ -845,7 +841,11 @@ int OWSearch(hw_ow_t* hw_ow) {
             }
         }
     }
-
+    ESP_LOGD(TAG, "Recived msg is: %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X",
+             readbuffer[0], readbuffer[1], readbuffer[2], readbuffer[3], readbuffer[4],
+             readbuffer[5], readbuffer[6], readbuffer[7], readbuffer[8], readbuffer[9],
+             readbuffer[10], readbuffer[11], readbuffer[12], readbuffer[13], readbuffer[14],
+             readbuffer[15], readbuffer[16]);
     ESP_LOGW(TAG, "OWSearch: an error occured so re-sync with DS2480B");
     // an error occured so re-sync with DS2480B
     hw_ow_probe(hw_ow);
@@ -976,7 +976,7 @@ int OWLevel(hw_ow_t* hw_ow, int new_level) {
                     }
 
                     else
-                        ESP_LOGD(TAG, "Read error");
+                        ESP_LOGW(TAG, "Read error");
                 }
             }
         }
@@ -999,7 +999,7 @@ int OWLevel(hw_ow_t* hw_ow, int new_level) {
                         hw_ow->ULevel = new_level;
                         rt = TRUE;
                     } else
-                        ESP_LOGD(TAG, "Read error");
+                        ESP_LOGW(TAG, "Read error");
                 }
             }
         }
@@ -1125,9 +1125,9 @@ int OWWriteBytePower(hw_ow_t* hw_ow, int sendbyte) {
 
                 if (temp_byte == sendbyte) rt = TRUE;
             } else
-                ESP_LOGD(TAG, "response error");
+                ESP_LOGW(TAG, "response error");
         } else
-            ESP_LOGD(TAG, "Read error");
+            ESP_LOGW(TAG, "Read error");
     }
 
     // if lost communication with DS2480B then reset
@@ -1188,9 +1188,9 @@ int OWReadBitPower(hw_ow_t* hw_ow, int applyPowerResponse) {
 
                 return rt;
             } else
-                ESP_LOGD(TAG, "response error");
+                ESP_LOGW(TAG, "response error");
         } else
-            ESP_LOGD(TAG, "Read error");
+            ESP_LOGW(TAG, "Read error");
     }
 
     // if lost communication with DS2480B then reset

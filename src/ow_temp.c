@@ -96,7 +96,7 @@ static float temp_calculate_temp(const struct rom_t* deviceAddress, unsigned cha
 
 bool ow_temp_reading_init(hw_ow_t* hw_ow) {
     if (!hw_ow) {
-        ESP_LOGE(TAG, "%s:%u hw_ow is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u hw_ow is NULL", __FILE__, __LINE__);
         return false;
     }
     if (OWReset(hw_ow) == FALSE) {
@@ -108,11 +108,11 @@ bool ow_temp_reading_init(hw_ow_t* hw_ow) {
 
 bool ow_temp_read_once(hw_ow_t* hw_ow, struct ow_temp_data_t* data) {
     if (!hw_ow) {
-        ESP_LOGE(TAG, "%s:%u hw_ow is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u hw_ow is NULL", __FILE__, __LINE__);
         return false;
     }
     if (!data) {
-        ESP_LOGE(TAG, "%s:%u ow_temp_data_t is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u ow_temp_data_t is NULL", __FILE__, __LINE__);
         return false;
     }
 
@@ -152,12 +152,12 @@ bool ow_temp_read_once(hw_ow_t* hw_ow, struct ow_temp_data_t* data) {
                         data->_rom.raw = hw_ow->rom.raw;
                         data->_temp = temp;
 
-                        ESP_LOGI(TAG, "%s temp: %3.1f`C", rom_to_string(&hw_ow->rom), temp);
+                        ESP_LOGD(TAG, "%s temp: %3.1f`C", rom_to_string(&hw_ow->rom), temp);
                         return true;
                     }
                 }
             } else {
-                ESP_LOGW(TAG, "Found else devise: %s", rom_to_string(&hw_ow->rom));
+                ESP_LOGD(TAG, "Found else devise: %s", rom_to_string(&hw_ow->rom));
             }
         } else
             retVal = false;
@@ -167,15 +167,15 @@ bool ow_temp_read_once(hw_ow_t* hw_ow, struct ow_temp_data_t* data) {
 
 bool ow_temp_read_sensor(hw_ow_t* hw_ow, const struct rom_t* sensorRom, float* retTemp) {
     if (!hw_ow) {
-        ESP_LOGE(TAG, "%s:%u hw_ow is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u hw_ow is NULL", __FILE__, __LINE__);
         return false;
     }
     if (!sensorRom) {
-        ESP_LOGE(TAG, "%s:%u sensorRom is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u sensorRom is NULL", __FILE__, __LINE__);
         return false;
     }
     if (!retTemp) {
-        ESP_LOGE(TAG, "%s:%u retTemp is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u retTemp is NULL", __FILE__, __LINE__);
         return false;
     }
 
@@ -202,7 +202,7 @@ bool ow_temp_read_sensor(hw_ow_t* hw_ow, const struct rom_t* sensorRom, float* r
         OWWriteBytePower(hw_ow, 0x44);
 
         // sleep for 1 second
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(750 / portTICK_PERIOD_MS);
 
         if (OWReadByte(hw_ow) != 0xFF) {
             ESP_LOGE(TAG, "Temperature conversion was not complete\n\r");
@@ -230,8 +230,7 @@ bool ow_temp_read_sensor(hw_ow_t* hw_ow, const struct rom_t* sensorRom, float* r
                     ESP_LOGW(TAG, "Device reading error: answer 0xFF");
                     return false;
                 }
-
-                ESP_LOGD(TAG, "Temp is: %3.1f`C", *retTemp);
+				  ESP_LOGD(TAG, "%s temp: %3.1f`C", rom_to_string(sensorRom), *retTemp);
 
                 return true;
             } else {
@@ -247,11 +246,11 @@ bool ow_temp_read_sensor(hw_ow_t* hw_ow, const struct rom_t* sensorRom, float* r
 
 uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, struct rom_t* rom_arr, uint16_t size) {
     if (!hw_ow) {
-        ESP_LOGE(TAG, "%s:%u hw_ow is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u hw_ow is NULL", __FILE__, __LINE__);
         return false;
     }
     if (!rom_arr) {
-        ESP_LOGE(TAG, "%s:%u rom_arr is NILL", __FILE__, __LINE__);
+        ESP_LOGE(TAG, "%s:%u rom_arr is NULL", __FILE__, __LINE__);
         return false;
     }
 
@@ -259,7 +258,7 @@ uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, struct rom_t* rom_arr, 
 
     uint16_t newSensorsCount = 0, sensorsCount = 0;
 
-    ESP_LOGI(TAG, "Searching sensors...");
+    ESP_LOGV(TAG, "Searching sensors...");
 
     if (OWReset(hw_ow) == FALSE) {
         ESP_LOGW(TAG, "1-Wire bus reset error");
@@ -281,7 +280,7 @@ uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, struct rom_t* rom_arr, 
                     rom_arr[i].raw = hw_ow->rom.raw;
                     newSensorsCount++;
 
-                    ESP_LOGI(TAG, "New sensor: %s", rom_to_string(&hw_ow->rom));
+                    ESP_LOGD(TAG, "New sensor: %s", rom_to_string(&hw_ow->rom));
                     break;
                 }
             }
@@ -290,7 +289,7 @@ uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, struct rom_t* rom_arr, 
         }
     }
 
-    ESP_LOGI(TAG, "Sensor founded: %d, total new: %u", sensorsCount, newSensorsCount);
+    ESP_LOGD(TAG, "Sensor founded: %d, total new: %u", sensorsCount, newSensorsCount);
 
     return newSensorsCount;
 }
