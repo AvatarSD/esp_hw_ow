@@ -19,9 +19,11 @@
 #include "freertos/task.h"
 
 typedef int uart_num_t;
+
 #define DS2480_TIMEOUT (200 / portTICK_PERIOD_MS)
 #define DS2480_DETECT_ERROR_COUNT 5
-#define DS2480_BREAK_COUNT 10000
+#define DS2480_BREAK_COUNT 1000
+#define BUF_SIZE 32
 const char* TAG = "hw_ow";
 
 /* Hardware abstraction */
@@ -68,23 +70,82 @@ static inline void hw_setbaud(uart_num_t uart_num, unsigned char new_baud) {
 /* DS2480B API */
 
 hw_ow_t* hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio) {
-    /// @todo uart init, 1-wire prepare, allloc resourses
+    int intr_alloc_flags = 0;
+#if CONFIG_UART_ISR_IN_IRAM
+    intr_alloc_flags = ESP_INTR_FLAG_IRAM;
+#endif
+    /* Configure parameters of an UART driver,
+     * communication pins and install the driver */
+    uart_config_t uart_config = {
+        .baud_rate = UART_BASE_SPEED,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(uart_num, tx_gpio, rx_gpio, -1, -1));
+    ESP_ERROR_CHECK(uart_driver_install(uart_num, BUF_SIZE, 0, 0, NULL, intr_alloc_flags));
+
+    if (en_gpio >= 0) {
+        // zero-initialize the config structure.
+        gpio_config_t io_conf = {// disable interrupt
+                                 .intr_type = GPIO_INTR_DISABLE,
+                                 // set as output mode
+                                 .mode = GPIO_MODE_OUTPUT,
+                                 // bit mask of the pins that you want to set,e.g.GPIO18/19
+                                 .pin_bit_mask = 1U << en_gpio,
+                                 // disable pull-down mode
+                                 .pull_down_en = 1,
+                                 // disable pull-up mode
+                                 .pull_up_en = 0};
+        // configure GPIO with the given settings
+        gpio_config(&io_conf);
+        gpio_set_level(en_gpio, true);
+    }
 
     hw_ow_t* hw_ow = malloc(sizeof(hw_ow_t));
-    if (!hw_ow) return NULL;
-    // reset modes
+    if (!hw_ow) {
+        uart_driver_delete(uart_num);
+        return NULL;
+    }
+    hw_ow->uart_num = uart_num;
+    hw_ow->en_pin = en_gpio;
     hw_ow->UMode = MODSEL_COMMAND;
     hw_ow->UBaud = PARMSET_9600;
     hw_ow->USpeed = SPEEDSEL_FLEX;
     hw_ow->ULevel = MODE_NORMAL;
-
     hw_ow->LastDiscrepancy = 0;
     hw_ow->LastDeviceFlag = FALSE;
     hw_ow->LastFamilyDiscrepancy = 0;
-
     hw_ow->crc8 = 0;
 
-    return NULL;
+    return hw_ow;
+}
+
+void hw_ow_delete(hw_ow_t* hw_ow) {
+    if (!hw_ow) {
+        ESP_LOGE(TAG, "%s:%u hw_ow is NILL", __FILE__, __LINE__);
+        return;
+    }
+    if (hw_ow->en_pin >= 0) {
+        // zero-initialize the config structure.
+        gpio_config_t io_conf = {// disable interrupt
+                                 .intr_type = GPIO_INTR_DISABLE,
+                                 // set as output mode
+                                 .mode = GPIO_MODE_INPUT,
+                                 // bit mask of the pins that you want to set,e.g.GPIO18/19
+                                 .pin_bit_mask = 1U << hw_ow->en_pin,
+                                 // disable pull-down mode
+                                 .pull_down_en = 1,
+                                 // disable pull-up mode
+                                 .pull_up_en = 0};
+        // configure GPIO with the given settings
+        gpio_config(&io_conf);
+    }
+    uart_driver_delete(hw_ow->uart_num);
+    free(hw_ow);
 }
 
 //---------------------------------------------------------------------------
@@ -264,16 +325,13 @@ int hw_ow_change_baud(hw_ow_t* hw_ow, unsigned char newbaud) {
 }
 
 void hw_ow_hardware_reset(hw_ow_t* hw_ow) {
+    if (hw_ow->en_pin < 0) return;
     ESP_LOGE(TAG, "DS2480B HardwareReset, because it not answered several times");
-    /** @todo turn hw_en disable */
-    // DALL_PWR_DDR |= (1<<DALL_PWR_PIN);
-    // DALL_PWR_PORT &= ~(1<<DALL_PWR_PIN);
-    // vTaskDelay( 1000/ portTICK_PERIOD_MS );
-    // DALL_PWR_DDR &= ~(1<<DALL_PWR_PIN);
-    // vTaskDelay( 30/ portTICK_PERIOD_MS );
-}
 
-void hw_ow_delete(hw_ow_t* hw_ow) { /** @todo */
+    gpio_set_level(hw_ow->en_pin, false);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    gpio_set_level(hw_ow->en_pin, true);
+    vTaskDelay(30 / portTICK_PERIOD_MS);
 }
 
 //---------------------------------------------------------------------------

@@ -168,6 +168,7 @@
 
 typedef struct hw_ow_type {
     uart_port_t uart_num;
+    int8_t en_pin;
 
     struct rom_t rom;
 
