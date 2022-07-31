@@ -22,8 +22,8 @@ typedef int uart_num_t;
 
 #define DS2480_TIMEOUT (200 / portTICK_PERIOD_MS)
 #define DS2480_DETECT_ERROR_COUNT 5
-#define DS2480_BREAK_COUNT 1000
-#define BUF_SIZE 32
+#define DS2480_BREAK_COUNT 64
+#define BUF_SIZE 128
 static const char* TAG = "hw_ow";
 
 /* Hardware abstraction */
@@ -35,7 +35,8 @@ static inline int hw_read(uart_num_t uart_num, size_t size, void* buff) {
 }
 
 static inline int hw_break(uart_num_t uart_num) {
-    return uart_write_bytes_with_break(uart_num, NULL, 0, DS2480_BREAK_COUNT);
+    static const uint8_t zero = 0;
+    return uart_write_bytes_with_break(uart_num, &zero, sizeof(zero), DS2480_BREAK_COUNT);
 }
 static inline void hw_flush(uart_num_t uart_num) { ESP_ERROR_CHECK(uart_flush(uart_num)); }
 
@@ -86,7 +87,9 @@ hw_ow_t* hw_ow_new(uart_port_t uart_num, int tx_gpio, int rx_gpio, int en_gpio) 
     };
     ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(uart_num, tx_gpio, rx_gpio, -1, -1));
-    ESP_ERROR_CHECK(uart_driver_install(uart_num, BUF_SIZE, 0, 0, NULL, intr_alloc_flags));
+    ESP_ERROR_CHECK(uart_driver_install(uart_num, BUF_SIZE * 2, 0, 0, NULL, intr_alloc_flags));
+ 
+    ESP_LOGI(TAG, "Driver for: UART%i registered ", uart_num);
 
     if (en_gpio >= 0) {
         // zero-initialize the config structure.
