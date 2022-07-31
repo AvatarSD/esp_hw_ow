@@ -24,7 +24,7 @@ typedef int uart_num_t;
 #define DS2480_DETECT_ERROR_COUNT 5
 #define DS2480_BREAK_COUNT 1000
 #define BUF_SIZE 32
-const char* TAG = "hw_ow";
+static const char* TAG = "hw_ow";
 
 /* Hardware abstraction */
 static inline int hw_write(uart_num_t uart_num, size_t size, void* buff) {

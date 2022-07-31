@@ -15,7 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-const char* TAG = "ow_temp";
+static const char* TAG = "ow_temp";
 
 // Model IDs
 #define DS18S20MODEL 0x10
