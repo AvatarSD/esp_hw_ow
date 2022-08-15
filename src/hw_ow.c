@@ -841,11 +841,11 @@ int OWSearch(hw_ow_t* hw_ow) {
             }
         }
     }
-    ESP_LOGD(TAG, "Recived msg is: %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X",
-             readbuffer[0], readbuffer[1], readbuffer[2], readbuffer[3], readbuffer[4],
-             readbuffer[5], readbuffer[6], readbuffer[7], readbuffer[8], readbuffer[9],
-             readbuffer[10], readbuffer[11], readbuffer[12], readbuffer[13], readbuffer[14],
-             readbuffer[15], readbuffer[16]);
+    // ESP_LOGD(TAG, "Recived msg is: %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X",
+    //          readbuffer[0], readbuffer[1], readbuffer[2], readbuffer[3], readbuffer[4],
+    //          readbuffer[5], readbuffer[6], readbuffer[7], readbuffer[8], readbuffer[9],
+    //          readbuffer[10], readbuffer[11], readbuffer[12], readbuffer[13], readbuffer[14],
+    //          readbuffer[15], readbuffer[16]);
     ESP_LOGW(TAG, "OWSearch: an error occured so re-sync with DS2480B");
     // an error occured so re-sync with DS2480B
     hw_ow_probe(hw_ow);

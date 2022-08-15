@@ -10,7 +10,7 @@
 
 #include "ow_rom.h"
 
-const char *ow_temp_data_get_temp_str(double *_temp);
+const char *ow_temp_data_get_temp_str(float _temp);
 
 struct ow_temp_data_t {
     struct rom_t _rom;

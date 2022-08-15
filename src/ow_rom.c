@@ -43,8 +43,8 @@ void rom_zeroing(struct rom_t *rom) {
 }
 
 bool rom_from_string(struct rom_t *rom, const char *str) {
-    sscanf(str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", rom->no[0], rom->no[1], rom->no[2],
-           rom->no[3], rom->no[4], rom->no[5], rom->no[6], rom->no[7]);
+    sscanf(str, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx:%hhx", rom->no + 0, rom->no + 1, rom->no + 2,
+           rom->no + 3, rom->no + 4, rom->no + 5, rom->no + 6, rom->no + 7);
 
     return true;
 }
