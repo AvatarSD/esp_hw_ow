@@ -19,7 +19,7 @@ bool ow_temp_reading_init(hw_ow_t* hw_ow);
 bool ow_temp_read_once(hw_ow_t* hw_ow, struct ow_temp_data_t* data);
 
 /* Second algoritm*/
-bool ow_temp_read_sensor(hw_ow_t* hw_ow, const struct rom_t* sensorRom, float* retTemp);
-uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, struct rom_t* buff, uint16_t size);
+bool ow_temp_read_sensor(hw_ow_t* hw_ow, const rom_t* sensorRom, float* retTemp);
+uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, rom_t* buff, uint16_t size);
 
 #endif /* DALLASONEWIRE_DALLASTEMP_H_ */

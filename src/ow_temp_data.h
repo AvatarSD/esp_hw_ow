@@ -13,7 +13,7 @@
 const char *ow_temp_data_get_temp_str(float _temp);
 
 struct ow_temp_data_t {
-    struct rom_t _rom;
+    rom_t _rom;
     double _temp;
 };
 

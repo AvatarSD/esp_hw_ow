@@ -40,7 +40,7 @@ static const char* TAG = "ow_temp";
 #define TEMP_12_BIT 0x7F  // 12 bit
 
 // reads scratchpad and returns the temperature in degrees C
-static float temp_calculate_temp(const struct rom_t* deviceAddress, unsigned char* scratchPad) {
+static float temp_calculate_temp(const rom_t* deviceAddress, unsigned char* scratchPad) {
     int16_t rawTemperature = (((int16_t)scratchPad[TEMP_MSB]) << 8) | scratchPad[TEMP_LSB];
     ESP_LOGV(TAG, "Calculating Temperature..");
     switch (deviceAddress->no[0]) {
@@ -165,7 +165,7 @@ bool ow_temp_read_once(hw_ow_t* hw_ow, struct ow_temp_data_t* data) {
     return false;
 }
 
-bool ow_temp_read_sensor(hw_ow_t* hw_ow, const struct rom_t* sensorRom, float* retTemp) {
+bool ow_temp_read_sensor(hw_ow_t* hw_ow, const rom_t* sensorRom, float* retTemp) {
     if (!hw_ow) {
         ESP_LOGE(TAG, "%s:%u hw_ow is NULL", __FILE__, __LINE__);
         return false;
@@ -244,7 +244,7 @@ bool ow_temp_read_sensor(hw_ow_t* hw_ow, const struct rom_t* sensorRom, float* r
     return false;
 }
 
-uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, struct rom_t* rom_arr, uint16_t size) {
+uint16_t ow_temp_search_all_temp_sensors(hw_ow_t* hw_ow, rom_t* rom_arr, uint16_t size) {
     if (!hw_ow) {
         ESP_LOGE(TAG, "%s:%u hw_ow is NULL", __FILE__, __LINE__);
         return false;

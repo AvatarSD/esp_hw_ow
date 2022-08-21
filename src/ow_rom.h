@@ -12,22 +12,22 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-struct rom_t {
+typedef struct {
     union {
         unsigned char no[8];
         uint64_t raw;
     };
-};
+} rom_t;
 
-static_assert(sizeof(struct rom_t) == 8);
+static_assert(sizeof(rom_t) == 8);
 
-bool rom_is_match_family(const struct rom_t *rom, unsigned char family);
-bool rom_less_then(const struct rom_t *rom, const struct rom_t *cmp);
-const char *rom_to_string(const struct rom_t *rom);
-bool rom_is_equal(const struct rom_t *rom, const struct rom_t *cmp);
-bool rom_is_null(const struct rom_t *rom);
+bool rom_is_match_family(const rom_t *rom, unsigned char family);
+bool rom_less_then(const rom_t *rom, const rom_t *cmp);
+const char *rom_to_string(const rom_t *rom);
+bool rom_is_equal(const rom_t *rom, const rom_t *cmp);
+bool rom_is_null(const rom_t *rom);
 
-void rom_zeroing(struct rom_t *rom);
-bool rom_from_string(struct rom_t *rom, const char *str);
+void rom_zeroing(rom_t *rom);
+bool rom_from_string(rom_t *rom, const char *str);
 
 #endif /* DALLASONEWIRE_ROM_H_ */
