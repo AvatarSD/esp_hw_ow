@@ -162,7 +162,7 @@ void hw_ow_delete(hw_ow_t* hw_ow) {
 //           FALSE - Could not detect DS2480B
 //
 int hw_ow_probe(hw_ow_t* hw_ow) {
-    ESP_LOGI(TAG, "DS2480B hw_ow_probeing...");
+    ESP_LOGD(TAG, "DS2480B hw_ow_probeing...");
 
     unsigned char sendpacket[10], readbuffer[10];
     unsigned char sendlen = 0;
