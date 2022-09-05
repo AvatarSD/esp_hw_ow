@@ -35,8 +35,12 @@ static inline int hw_read(uart_num_t uart_num, size_t size, void* buff) {
 }
 
 static inline int hw_break(uart_num_t uart_num) {
-    static const uint8_t zero = 0;
-    return uart_write_bytes_with_break(uart_num, &zero, sizeof(zero), DS2480_BREAK_COUNT);
+    const uint8_t zero = 0;
+    uart_set_baudrate(uart_num, UART_BREAK_SPEED);
+    uart_write_bytes(uart_num, &zero, sizeof(zero));  // send a zero byte
+    uart_set_baudrate(uart_num,
+                      UART_BASE_SPEED);  // set baudrate back to normal after break is sent
+    return 0;
 }
 static inline void hw_flush(uart_num_t uart_num) { ESP_ERROR_CHECK(uart_flush(uart_num)); }
 
@@ -841,7 +845,8 @@ int OWSearch(hw_ow_t* hw_ow) {
             }
         }
     }
-    // ESP_LOGD(TAG, "Recived msg is: %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X",
+    // ESP_LOGD(TAG, "Recived msg is: %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X, %X,
+    // %X",
     //          readbuffer[0], readbuffer[1], readbuffer[2], readbuffer[3], readbuffer[4],
     //          readbuffer[5], readbuffer[6], readbuffer[7], readbuffer[8], readbuffer[9],
     //          readbuffer[10], readbuffer[11], readbuffer[12], readbuffer[13], readbuffer[14],
