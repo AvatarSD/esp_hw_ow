@@ -12,7 +12,7 @@
 
 // definitions
 #define UART_BASE_SPEED 9600
-#define UART_BREAK_SPEED 4800
+#define UART_BREAK_SPEED 2400
 #define UART_RX_BUFFER 32
 #define UART_TX_BUFFER 16
 

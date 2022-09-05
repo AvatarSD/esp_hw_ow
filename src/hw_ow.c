@@ -37,7 +37,9 @@ static inline int hw_read(uart_num_t uart_num, size_t size, void* buff) {
 static inline int hw_break(uart_num_t uart_num) {
     const uint8_t zero = 0;
     uart_set_baudrate(uart_num, UART_BREAK_SPEED);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     uart_write_bytes(uart_num, &zero, sizeof(zero));  // send a zero byte
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     uart_set_baudrate(uart_num,
                       UART_BASE_SPEED);  // set baudrate back to normal after break is sent
     return 0;
